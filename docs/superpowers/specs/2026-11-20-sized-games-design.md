@@ -172,13 +172,13 @@ length?: { kind: 'timed'; minutes: number }   // ends itself on a clock (Reflex,
 ### 7. Menu
 
 ```
- Claude ~6 min left  ·  suggested: Lander (~4 min)
+ Claude ~6 min left  ·  suggested: Dodge (~3 min, new)
 
- > Lander         ~4 min   ★ suggested
+   Lander         ~4 min (you)
    Commit Rush    ~2 min
    Reflex         ~1 min
    Worm           ~5 min (you)
-   Dodge          ~3 min (est.)  NEW
+ > Dodge          ~3 min (est.)  NEW  ★ suggested
    Deep Dive      ~8 min
 ```
 
