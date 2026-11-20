@@ -90,24 +90,30 @@ Security headers: the existing pages keep their no-script policy. Only `/play/<i
 - Grid drawn as a `<pre>` of 20 lines; each run of same-coloured cells is a `<span>` with
   one of 16 CSS colour classes matching the arcade's ANSI names; only changed lines are
   re-rendered each frame.
-- Loop: `requestAnimationFrame` calling `session.tick(performance.now())`; a hidden tab pauses
-  (as the host pauses when the window is too small).
+- Loop: `requestAnimationFrame` calling `session.tick(performance.now())`. *Builder call:* a
+  hidden tab pauses a playing run by sending `p` only when the session is `playing`, and
+  resumes on return only if it was the page that paused it; `src/core/session.ts` is not
+  changed. Each run is seeded from `crypto.getRandomValues`.
 - Keys: `ArrowUp/Down/Left/Right` → `up/down/left/right`, `' '` → `space`, `Enter`,
   `Escape`, `Backspace`, `Tab`, single letters/digits/symbols lower-cased → same `Key` names
-  as the terminal's `parseKeys`. Keys the game uses get `preventDefault()` (no scrolling).
+  as the terminal's `parseKeys` (*builder call:* from `event.key`; any key with Ctrl, Alt or
+  Meta held is left to the browser, so shortcuts keep working). Keys the game uses get `preventDefault()` (no scrolling).
   P pauses, Esc ends the run, as in the terminal.
 - States: **ready** (`Press Enter to start`) → **playing** → **results**: score, "New best!"
   when beating the browser's own best, the name form, the Web top 10. Enter in results
   (outside the name field) plays again; Esc goes back to `/games/<id>`.
 - Name form: one text input (prefilled with the last name used, from `localStorage`) and
   a Save button; while the input has focus no key reaches the game. After saving: "Saved"
-  plus the refreshed Web board, or the server's error message. A run can be saved once.
+  plus the refreshed Web board, or the server's error message. A run can be saved once
+  (*builder call:* enforced in the page only, by disabling the form after a successful save;
+  the server can't tell runs apart).
 - "Your best" per game is kept in `localStorage` (`tw-best-<id>`); storage failures are ignored.
 - A crash in a game shows "<Title> crashed" like the terminal and offers Enter to restart.
 
 ### Web scores on the server
 
-- New table, schema version 2 (migration from 1):
+- New table, schema version 2 (`SCHEMA_VERSION` 1 → 2, an added migration step; existing
+  databases upgrade in place, never downgrade):
   `web_best(game TEXT, name TEXT, name_key TEXT, score INTEGER, at TEXT, submissions INTEGER, PRIMARY KEY(game, name_key))`
   plus index `(game, score DESC, at)`. `name_key` = lower-cased name; one row per name per
   game holding that name's best; `submissions` counts every accepted post.
@@ -116,16 +122,25 @@ Security headers: the existing pages keep their no-script policy. Only `/play/<i
   inner whitespace collapsed, 1–20 characters from letters, digits, space, `_ - .`.
 - Rate limits (429): 30 posts per IP per hour (only with `TRUST_PROXY=1`), 600 posts per hour
   globally.
-- Response: `{ rank: number | null, best: number, top: WebRow[] }`.
+- Response (200 for every valid post): `{ rank: number | null, best: number, top: WebRow[] }`.
+  *Builder call:* a post scoring higher than the name's stored best replaces score, `at`
+  and the name's display casing; an equal or lower score leaves the row as it is (ties keep
+  the older entry) but still counts in `submissions`. `best` is the name's stored best after
+  the post; `rank` is that best's position in the game's web top 10, or `null` when outside it.
+- *Builder call:* games without `maxScore` keep the 1,000,000 default cap; fake scores are
+  the accepted risk, removed with the admin command.
 - Admin (`server/dist/admin.js`): `web-board <game>`, `delete-web-score <name> <game>`.
+- `DELETE /v1/me` and `delete-player` don't touch `web_best` (web names aren't linked to players).
 - Web names are never shown on the Arcade board or returned by the existing `/v1/boards`
   endpoints the terminal arcade uses.
 
 ### Build
 
 - `scripts/build-server.mjs` also builds `server/web/play.ts` → `server/dist/public/play.js`
-  (esbuild, `platform: 'browser'`, `format: 'iife'`, minified) and writes its content hash
-  for the `?v=` query. The Dockerfile copies `server/dist` as today, so it ships automatically.
+  (esbuild, `platform: 'browser'`, `format: 'iife'`, minified) *before* the server bundle, and
+  passes the file's content hash into the server bundle with esbuild `define`, for the `?v=`
+  query (*builder call*). The server reads `public/play.js` next to `main.js` once at startup
+  and serves it from memory; `send()` takes per-route headers so `/play/<id>` gets its own CSP. The Dockerfile copies `server/dist` as today, so it ships automatically.
 
 ## Left to the builder
 
