@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import * as fs from 'node:fs';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { addScore, bestScore, loadScores } from './scores';
@@ -11,7 +11,10 @@ beforeEach(() => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'scores-'));
   file = path.join(tmp, 'sub', 'scores.json');
 });
-afterEach(() => fs.rmSync(tmp, { recursive: true, force: true }));
+afterEach(() => {
+  vi.restoreAllMocks();
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
 
 describe('paths', () => {
   it('derives locations from home', () => {
@@ -86,5 +89,87 @@ describe('scores', () => {
     addScore(file, 'g', 1);
     addScore(file, 'g', 2);
     expect(fs.readdirSync(path.dirname(file)).filter((f) => f.endsWith('.tmp'))).toEqual([]);
+  });
+
+  it('rejects non-finite scores without touching the file', () => {
+    expect(() => addScore(file, 'g', NaN)).toThrow();
+    expect(() => addScore(file, 'g', Infinity)).toThrow();
+    expect(fs.existsSync(file)).toBe(false);
+  });
+
+  it('does not back up a file replaced by valid content after a corrupt read', () => {
+    addScore(file, 'g', 1);
+    const good = fs.readFileSync(file, 'utf8');
+    const real = fs.readFileSync;
+    let calls = 0;
+    vi.spyOn(fs, 'readFileSync').mockImplementation(((f: any, o: any) => {
+      calls++;
+      if (calls === 1) return '{oops';
+      return real(f, o);
+    }) as any);
+    // first read returns corrupt text, re-read returns the real (valid) content
+    expect(loadScores(file).g).toHaveLength(1);
+    expect(fs.existsSync(file + '.bak')).toBe(false);
+    expect(fs.readFileSync(file, 'utf8')).toBe(good);
+  });
+
+  describe('failure paths', () => {
+    const err = (code: string) => Object.assign(new Error(code), { code });
+
+    it('retries transient rename errors then succeeds', () => {
+      const real = fs.renameSync;
+      let n = 0;
+      vi.spyOn(fs, 'renameSync').mockImplementation(((a: any, b: any) => {
+        if (n++ < 2) throw err('EPERM');
+        return real(a, b);
+      }) as any);
+      addScore(file, 'g', 4);
+      expect(n).toBe(3);
+      expect(bestScore(file, 'g')).toBe(4);
+    });
+
+    it('persistent EPERM throws, removes tmp, keeps original', () => {
+      addScore(file, 'g', 4);
+      const before = fs.readFileSync(file, 'utf8');
+      const spy = vi.spyOn(fs, 'renameSync').mockImplementation(() => {
+        throw err('EPERM');
+      });
+      expect(() => addScore(file, 'g', 9)).toThrow();
+      expect(spy).toHaveBeenCalledTimes(5);
+      spy.mockRestore();
+      expect(fs.readFileSync(file, 'utf8')).toBe(before);
+      expect(fs.readdirSync(path.dirname(file)).filter((f) => f.endsWith('.tmp'))).toEqual([]);
+    });
+
+    it('non-transient rename error is not retried', () => {
+      const spy = vi.spyOn(fs, 'renameSync').mockImplementation(() => {
+        throw err('ENOSPC');
+      });
+      expect(() => addScore(file, 'g', 1)).toThrow();
+      expect(spy).toHaveBeenCalledTimes(1);
+      spy.mockRestore();
+      expect(fs.readdirSync(path.dirname(file)).filter((f) => f.endsWith('.tmp'))).toEqual([]);
+    });
+
+    it('persistent read EPERM makes addScore throw and leaves file unchanged', () => {
+      addScore(file, 'g', 4);
+      const before = fs.readFileSync(file, 'utf8');
+      vi.spyOn(fs, 'readFileSync').mockImplementation(() => {
+        throw err('EPERM');
+      });
+      expect(() => addScore(file, 'g', 9)).toThrow();
+      vi.restoreAllMocks();
+      expect(fs.readFileSync(file, 'utf8')).toBe(before);
+    });
+
+    it('removes a partial tmp when the tmp write fails', () => {
+      vi.spyOn(fs, 'writeFileSync').mockImplementation(((f: any) => {
+        fs.appendFileSync(f, 'partial');
+        throw err('ENOSPC');
+      }) as any);
+      expect(() => addScore(file, 'g', 1)).toThrow();
+      vi.restoreAllMocks();
+      expect(fs.readdirSync(path.dirname(file)).filter((f) => f.endsWith('.tmp'))).toEqual([]);
+    });
   });
 });
