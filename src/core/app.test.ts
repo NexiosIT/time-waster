@@ -461,6 +461,21 @@ describe('App online', () => {
     expect(has(rows(app), ' 1. 3')).toBe(true);
   });
 
+  it('Tab to World reloads the board (so it includes the run just sent); Tab back to You does not', () => {
+    const online = new FakeOnline();
+    const app = mk([fake('a', 'Alpha')], { online });
+    app.key('enter', 0);
+    play(app);
+    const loads = () => online.calls.filter((c) => c === 'load a').length;
+    expect(loads()).toBe(1);
+    app.key('tab', 0);
+    expect(loads()).toBe(2);
+    app.key('tab', 0);
+    expect(loads()).toBe(2);
+    app.key('tab', 0);
+    expect(loads()).toBe(3);
+  });
+
   it('a 39-character login is clipped and the layout stays inside 60 columns', () => {
     const online = new FakeOnline();
     online.acct = { login: LOGIN39 };

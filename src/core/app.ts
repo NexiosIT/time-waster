@@ -102,7 +102,11 @@ export class App {
       case 'results':
         if (k === 'enter' && this.game) this.start(this.game, nowMs);
         else if (k === 'escape') this.toMenu(nowMs);
-        else if (k === 'tab' && this.online) this.worldTab = !this.worldTab;
+        else if (k === 'tab' && this.online) {
+          this.worldTab = !this.worldTab;
+          // Reload on every switch to World: the first load may predate the run's submit, or was offline.
+          if (this.worldTab) this.online.loadBoard(this.game!.id);
+        }
         break;
       case 'crashed':
         if (k === 'enter' || k === 'escape') this.toMenu(nowMs);
