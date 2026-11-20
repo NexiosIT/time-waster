@@ -530,6 +530,153 @@ function drawWorld(area, view, signedIn) {
   if (!signedIn) centre(area, 17, "O in the menu to join", "gray");
 }
 
+// src/core/heckles.ts
+var BEHIND = [
+  "{time} in and you're at {score}. Your best is {best}. Just saying.",
+  "Your best was {best}. This run is... a run.",
+  "{score}? Bold strategy. Let's see if it pays off.",
+  "At this pace you'll beat {best} sometime next year.",
+  "Remember when you scored {best}? Me too. Good times.",
+  "Damn. {score}. Is the keyboard upside down?",
+  "Not to compare, but past you would be crushing this.",
+  "{score} after {time}. I'm not mad, just disappointed.",
+  "This is fine. Everything is fine. ({score} vs {best})",
+  "Hell of a warm-up. When does the real run start?"
+];
+var STUCK = [
+  "Are you playing or just admiring the graphics?",
+  "{time} without a single point. Impressive, in a way.",
+  "Still {score}. The score won't go up by staring at it.",
+  "Did Claude finish and you forgot to blink?",
+  "Shit happens. So could points, any minute now.",
+  "Fun fact: points are allowed. Encouraged, even.",
+  "Take your time. Claude is only doing all your actual work.",
+  "Crap, did it freeze? Oh no, that's just you."
+];
+var NO_BEST = [
+  "First time? It shows.",
+  "{game}: easy to learn, apparently hard to master.",
+  "No pressure. Well, some pressure.",
+  "You're doing great. For a beginner. At {game}.",
+  "Hell, everyone starts somewhere. Here, apparently.",
+  "Interesting technique. Very... unique.",
+  "Keep going. Statistically you have to get better.",
+  "Damn, {score} already. Wait, is that good? Who knows."
+];
+var RUN_WORSE = [
+  "{score}. Your best is {best}. Cool cool cool.",
+  "{score}. Bold of you to stop there.",
+  "Well, that happened. {score}, for the record.",
+  "{best} was your best. {score} was... also a number.",
+  "Damn, so close to {best}. Not really, but still.",
+  "{score}. Maybe Claude should play next time.",
+  "Shit. Well. There's always another run.",
+  "{score}. I'll pretend I didn't see that."
+];
+var RUN_BEST = [
+  "New best: {score}. Took you long enough.",
+  "{score}! Don't let it go to your head.",
+  "New best. Even a broken clock, you know.",
+  "Finally. {score}. Was that so hard?",
+  "Hell yes, {score}. Now do it again, I dare you.",
+  "New best. Enjoy it, it won't last."
+];
+var LEADER = [
+  "{leader} holds the record with {score}. Must be nice having that much free time.",
+  "{score} in {game}. {leader}, does your manager know about this?",
+  "Congrats {leader}. Truly the best at the thing nobody asked you to do.",
+  "{leader} is on top. For now. Enjoy it while it lasts.",
+  "{score}? Damn, {leader}. Maybe go outside sometime.",
+  "{leader}: living proof that Claude does all the actual work.",
+  "Bow down to {leader}. Or don't. Honestly, it's {game}.",
+  "Hell of a score, {leader}. Shame about your productivity."
+];
+var ALL_LINES = [...BEHIND, ...STUCK, ...NO_BEST, ...RUN_WORSE, ...RUN_BEST, ...LEADER];
+function fill(template, vars) {
+  return template.replace(/\{(score|best|game|time|leader)\}/g, (_, k) => String(vars[k] ?? ""));
+}
+
+// src/core/heckler.ts
+var CHECK_MS = 45e3;
+var STUCK_MS = 45e3;
+var SHOW_MS = 6e3;
+var GAP_MS = 2e4;
+var BEHIND_RATIO = 0.6;
+var NO_BEST_CHANCE = 0.5;
+var Heckler = class {
+  constructor(rnd) {
+    this.rnd = rnd;
+  }
+  rnd;
+  line = null;
+  shownAt = -Infinity;
+  lastLineAt = -Infinity;
+  nextCheck = CHECK_MS;
+  lastScore = null;
+  lastChange = 0;
+  startRun() {
+    this.line = null;
+    this.shownAt = -Infinity;
+    this.nextCheck = CHECK_MS;
+    this.lastScore = null;
+    this.lastChange = 0;
+  }
+  tick(i) {
+    if (this.lastScore !== null && i.score !== this.lastScore) this.lastChange = i.playedMs;
+    this.lastScore = i.score;
+    let pool = null;
+    if (i.playedMs >= this.nextCheck) {
+      while (this.nextCheck <= i.playedMs) this.nextCheck += CHECK_MS;
+      if (i.best !== null && i.best > 0) {
+        const share = i.expectedMs ? Math.min(1, i.playedMs / i.expectedMs) : 0.5;
+        if (i.score < BEHIND_RATIO * i.best * share) pool = BEHIND;
+      } else if (i.best === null && this.rnd() >= NO_BEST_CHANCE) pool = NO_BEST;
+    }
+    if (!pool && i.playedMs - this.lastChange >= STUCK_MS) {
+      pool = STUCK;
+      this.lastChange = i.playedMs;
+    }
+    if (!pool || i.nowMs - this.lastLineAt < GAP_MS) return;
+    this.line = fill(this.pick(pool), { score: i.score, best: i.best ?? "-", game: i.game, time: duration(i.playedMs) });
+    this.shownAt = i.nowMs;
+    this.lastLineAt = i.nowMs;
+  }
+  /** The line to show now, or null. */
+  current(nowMs) {
+    return this.line !== null && nowMs - this.shownAt < SHOW_MS ? this.line : null;
+  }
+  /** A line for the results screen. */
+  runOver(r) {
+    const pool = r.isBest ? RUN_BEST : RUN_WORSE;
+    return fill(this.pick(pool), { score: r.score, best: r.best ?? "-", game: r.game, time: "" });
+  }
+  pick(pool) {
+    return pool[Math.min(pool.length - 1, Math.floor(this.rnd() * pool.length))];
+  }
+};
+function duration(ms) {
+  const s = Math.floor(ms / 1e3);
+  return s < 120 ? `${s}s` : `${Math.floor(s / 60)} min`;
+}
+
+// src/core/settings.ts
+var DEFAULTS = { heckle: true };
+function isSettings(d) {
+  if (typeof d !== "object" || d === null || Array.isArray(d)) return false;
+  const h = d.heckle;
+  return h === void 0 || typeof h === "boolean";
+}
+function loadSettings(file) {
+  try {
+    return { ...DEFAULTS, ...loadJson(file, isSettings) ?? {} };
+  } catch {
+    return { ...DEFAULTS };
+  }
+}
+function saveSettings(file, s) {
+  writeAtomic(file, s);
+}
+
 // src/core/app.ts
 var ID_RE = /^[a-z0-9-]{1,32}$/;
 var TOO_SMALL = "Make the window bigger";
@@ -554,6 +701,10 @@ var App = class {
   confirmDelete = false;
   history = {};
   clock = new TaskClock();
+  settingsFile;
+  heckleOn = false;
+  heckler;
+  runLine = null;
   constructor(opts) {
     const seen = /* @__PURE__ */ new Set();
     const ok = [];
@@ -567,6 +718,9 @@ var App = class {
     this.runsFile = opts.runsFile;
     this.seed = opts.seed ?? Date.now();
     this.online = opts.online;
+    this.heckler = new Heckler(createRandom(this.seed ^ 24301));
+    this.settingsFile = opts.settingsFile;
+    if (this.settingsFile) this.heckleOn = loadSettings(this.settingsFile).heckle;
     this.refreshBest();
     this.preselect(opts.nowMs);
     const start = opts.startGameId ? this.games.find((g) => g.id === opts.startGameId) : void 0;
@@ -585,6 +739,7 @@ var App = class {
         else if (k === "down" && this.games.length) this.sel = (this.sel + 1) % this.games.length;
         else if (k === "enter" && this.games[this.sel]) this.start(this.games[this.sel], nowMs);
         else if (k === "o" && this.online) this.openOnline();
+        else if (k === "h" && this.settingsFile) this.toggleHeckling();
         break;
       case "signin":
         if (k === "escape") {
@@ -627,7 +782,28 @@ var App = class {
   tick(nowMs) {
     if (this.screen !== "playing") return;
     this.session.tick(nowMs);
+    this.heckle(nowMs);
     this.afterRun();
+  }
+  toggleHeckling() {
+    this.heckleOn = !this.heckleOn;
+    try {
+      saveSettings(this.settingsFile, { heckle: this.heckleOn });
+    } catch {
+    }
+  }
+  heckle(nowMs) {
+    const s = this.session;
+    if (!this.heckleOn || !s || s.status !== "playing") return;
+    const g = this.game;
+    this.heckler.tick({
+      nowMs,
+      playedMs: s.playedMs,
+      score: s.score,
+      best: this.best.get(g.id) ?? null,
+      expectedMs: g.length ? expectedLength(g.length, this.history[g.id] ?? []).ms : null,
+      game: g.title
+    });
   }
   /** done/attention go to the banner; every event feeds the task clock. */
   onEvent(ev, nowMs) {
@@ -650,6 +826,10 @@ var App = class {
     const view = this.banner.view(nowMs);
     const bcolor = this.banner.color();
     if (view?.mode === "full") buf.text(0, 0, clip(view.text, cols), bcolor);
+    else if (this.heckleOn && this.screen === "playing") {
+      const line = this.heckler.current(nowMs);
+      if (line) buf.text(0, 0, clip(line, cols), "brightMagenta");
+    }
     if (this.screen === "account" && !this.online.account()) this.toMenu(nowMs);
     const area = new CellBuffer(GAME_WIDTH, GAME_HEIGHT);
     let status = "";
@@ -676,6 +856,7 @@ var App = class {
     this.game = game;
     this.results = null;
     this.session = new GameSession(game, { seed: this.seed + this.runs++, nowMs });
+    this.heckler.startRun();
     this.screen = "playing";
     this.afterRun();
   }
@@ -760,10 +941,15 @@ var App = class {
   }
   finish(score) {
     const id = this.game.id;
+    const prevBest = this.best.get(id) ?? null;
+    this.runLine = null;
     try {
       const r = addScore(this.scoresFile, id, score);
       this.results = { score, isBest: r.isBest, top: r.top, saveFailed: false };
       if (r.top.length) this.best.set(id, Math.max(...r.top.map((e) => e.score)));
+      if (this.heckleOn) {
+        this.runLine = this.heckler.runOver({ score, best: r.isBest ? score : prevBest, isBest: r.isBest, game: this.game.title });
+      }
     } catch {
       this.results = { score, isBest: false, top: [], saveFailed: true };
     }
@@ -814,6 +1000,10 @@ var App = class {
       });
       area.text(0, 17, clip(this.games[this.sel].description, GAME_WIDTH), "gray");
       if (online2) drawMenuHint(area, online2.account());
+      if (this.settingsFile) {
+        const hint = `H: heckling ${this.heckleOn ? "on" : "off"}`;
+        area.text(GAME_WIDTH - hint.length, 18, hint, "gray");
+      }
     } else if (this.screen === "results" && this.results) {
       const r = this.results;
       centre2(1, `${this.game.title} \u2014 Score ${r.score}`, "brightWhite");
@@ -821,7 +1011,10 @@ var App = class {
       if (r.saveFailed) centre2(3, "Couldn't save score", "brightRed");
       const online2 = this.online;
       if (online2 && this.worldTab) drawWorld(area, online2.board(this.game.id), !!online2.account());
-      else r.top.forEach((e, i) => centre2(5 + i, `${String(i + 1).padStart(2)}. ${e.score}`));
+      else {
+        r.top.forEach((e, i) => centre2(5 + i, `${String(i + 1).padStart(2)}. ${e.score}`));
+        if (this.runLine) centre2(16, this.runLine, "brightMagenta");
+      }
       centre2(18, `Enter: play again \xB7 Esc: menu${online2 ? " \xB7 Tab: You / World" : ""}`, "gray");
     } else if (this.screen === "signin") {
       drawSignIn(area, this.online.signIn());
@@ -1069,10 +1262,13 @@ function aliveFile(home) {
 function runsFile(home) {
   return path3.join(dataDir(home), "runs.json");
 }
+function settingsFile(home) {
+  return path3.join(dataDir(home), "settings.json");
+}
 
 // src/core/online/config.ts
-var SERVER_URL = "";
-var GITHUB_CLIENT_ID = "";
+var SERVER_URL = "https://lobster-app-di8o6.ondigitalocean.app";
+var GITHUB_CLIENT_ID = "Iv23liYZorBnLFMYLrsG";
 function onlineConfig(env) {
   const serverUrl = (env.TIME_WASTER_SERVER || SERVER_URL).replace(/\/+$/, "");
   const clientId = env.TIME_WASTER_GITHUB_CLIENT_ID || GITHUB_CLIENT_ID;
@@ -1749,8 +1945,8 @@ function angleDiff(from, to) {
 function turnToward(travel, target, maxStep, lastTurn) {
   let d = angleDiff(travel, target);
   if (Math.abs(Math.abs(d) - Math.PI) < 1e-9) d = Math.PI * lastTurn;
-  const step = Math.min(Math.max(d, -maxStep), maxStep);
-  return ((travel + step) % TAU + TAU) % TAU;
+  const step2 = Math.min(Math.max(d, -maxStep), maxStep);
+  return ((travel + step2) % TAU + TAU) % TAU;
 }
 function isDrifting(travel, heading) {
   return Math.abs(angleDiff(travel, headingAngle(heading))) > DRIFT_THRESHOLD;
@@ -2226,6 +2422,247 @@ var drift = {
 };
 var drift_default = drift;
 
+// src/games/galaxy/waves.ts
+var WAVES = [
+  { startRow: 2, marchTicks: 12, minMarchTicks: 3, fireChance: 0.02, maxEnemyShots: 2 },
+  { startRow: 3, marchTicks: 10, minMarchTicks: 2, fireChance: 0.03, maxEnemyShots: 2 },
+  { startRow: 4, marchTicks: 8, minMarchTicks: 2, fireChance: 0.04, maxEnemyShots: 2 },
+  { startRow: 5, marchTicks: 7, minMarchTicks: 1, fireChance: 0.05, maxEnemyShots: 3 },
+  { startRow: 6, marchTicks: 6, minMarchTicks: 1, fireChance: 0.06, maxEnemyShots: 3 }
+];
+function marchInterval(spec, alive, total) {
+  return Math.max(
+    spec.minMarchTicks,
+    Math.round(spec.minMarchTicks + (spec.marchTicks - spec.minMarchTicks) * alive / total)
+  );
+}
+
+// src/games/galaxy/state.ts
+var ROWS = 4;
+var COLS = 8;
+var CELL_W = 4;
+var SHIP_Y = 18;
+var SHIP_W = 3;
+var DEBRIS_Y = 16;
+var LOSE_ROW = 17;
+var LIVES = 3;
+var POINTS = { drone: 10, brute: 20, stinger: 30 };
+var WAVE_BONUS = 100;
+var CLEAR_BONUS = 500;
+var BLINK_TICKS = 20;
+var BANNER_TICKS = 40;
+var ENEMY_SHOT_EVERY = 2;
+var SHIP_MAX_X = 57;
+var FIELD_MAX_X = 59;
+var SHOT_MAX_Y = 19;
+function kindOfRow(r) {
+  return r === 0 ? "drone" : r <= 2 ? "brute" : "stinger";
+}
+function enemyAt(s, r, c) {
+  return { x: s.fx + c * CELL_W, y: s.fy + r };
+}
+function waveStart(wave2) {
+  const spec = WAVES[wave2 - 1];
+  const debris = [];
+  for (const x0 of [10, 28, 46]) {
+    for (let dx = 0; dx < 4; dx++) debris.push({ x: x0 + dx, y: DEBRIS_Y });
+  }
+  return {
+    wave: wave2,
+    shot: null,
+    enemyShots: [],
+    alive: Array.from({ length: ROWS }, () => Array(COLS).fill(true)),
+    fx: 14,
+    fy: spec.startRow,
+    dir: 1,
+    marchIn: marchInterval(spec, ROWS * COLS, ROWS * COLS),
+    debris
+  };
+}
+function initState() {
+  return {
+    ...waveStart(1),
+    lives: LIVES,
+    score: 0,
+    shipX: 28,
+    tick: 0,
+    blink: 0,
+    banner: 0,
+    over: false
+  };
+}
+function onKey3(s, key) {
+  if (s.over || s.banner > 0) return s;
+  if (key === "left") return { ...s, shipX: Math.max(0, s.shipX - 2) };
+  if (key === "right") return { ...s, shipX: Math.min(SHIP_MAX_X, s.shipX + 2) };
+  if (key === "space" && s.shot === null) {
+    return { ...s, shot: { x: s.shipX + 1, y: SHIP_Y - 1 } };
+  }
+  return s;
+}
+function stepShot(s) {
+  if (s.shot === null) return s;
+  const x = s.shot.x;
+  const y = s.shot.y - 1;
+  if (y < 1) return { ...s, shot: null };
+  const di = s.debris.findIndex((p) => p.x === x && p.y === y);
+  if (di >= 0) {
+    return { ...s, shot: null, debris: s.debris.filter((_, i) => i !== di) };
+  }
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      if (!s.alive[r][c]) continue;
+      const e = enemyAt(s, r, c);
+      if (e.y === y && x >= e.x && x <= e.x + 2) {
+        return {
+          ...s,
+          shot: null,
+          score: s.score + POINTS[kindOfRow(r)],
+          alive: s.alive.map((row, ri) => ri === r ? row.map((a, ci) => ci === c ? false : a) : row)
+        };
+      }
+    }
+  }
+  return { ...s, shot: { x, y } };
+}
+function aliveCount(s) {
+  return s.alive.reduce((n, row) => n + row.filter(Boolean).length, 0);
+}
+function aliveColumns(s) {
+  const cols = [];
+  for (let c = 0; c < COLS; c++) if (s.alive.some((row) => row[c])) cols.push(c);
+  return cols;
+}
+function stepEnemyShots(s) {
+  if (s.tick % ENEMY_SHOT_EVERY !== 0 || s.enemyShots.length === 0) return s;
+  let debris = s.debris;
+  const shots = [];
+  for (const p of s.enemyShots) {
+    const x = p.x;
+    const y = p.y + 1;
+    if (y > SHOT_MAX_Y) continue;
+    const di = debris.findIndex((d) => d.x === x && d.y === y);
+    if (di >= 0) {
+      debris = debris.filter((_, i) => i !== di);
+      continue;
+    }
+    if (s.blink === 0 && y === SHIP_Y && x >= s.shipX && x < s.shipX + SHIP_W) {
+      const lives = s.lives - 1;
+      return { ...s, debris, lives, enemyShots: [], blink: BLINK_TICKS, over: lives === 0 };
+    }
+    shots.push({ x, y });
+  }
+  return { ...s, debris, enemyShots: shots };
+}
+function enemyFire(s, random) {
+  const spec = WAVES[s.wave - 1];
+  if (s.enemyShots.length >= spec.maxEnemyShots || random() >= spec.fireChance) return s;
+  const cols = aliveColumns(s);
+  if (cols.length === 0) return s;
+  const c = cols[Math.floor(random() * cols.length)];
+  let r = ROWS - 1;
+  while (!s.alive[r][c]) r--;
+  const e = enemyAt(s, r, c);
+  if (e.y + 1 >= DEBRIS_Y) return s;
+  return { ...s, enemyShots: [...s.enemyShots, { x: e.x + 1, y: e.y + 1 }] };
+}
+function march(s) {
+  const cols = aliveColumns(s);
+  if (cols.length === 0) return s;
+  if (s.marchIn > 1) return { ...s, marchIn: s.marchIn - 1 };
+  const marchIn = marchInterval(WAVES[s.wave - 1], aliveCount(s), ROWS * COLS);
+  const fx = s.fx + s.dir;
+  const left = fx + cols[0] * CELL_W;
+  const right = fx + cols[cols.length - 1] * CELL_W + 2;
+  if (left < 0 || right > FIELD_MAX_X) {
+    return { ...s, fy: s.fy + 1, dir: s.dir === 1 ? -1 : 1, marchIn };
+  }
+  return { ...s, fx, marchIn };
+}
+function reachedLoseRow(s) {
+  for (let r = ROWS - 1; r >= 0; r--) {
+    if (s.alive[r].some(Boolean)) return s.fy + r >= LOSE_ROW;
+  }
+  return false;
+}
+function step(s, random) {
+  if (s.over) return s;
+  if (s.banner > 0) {
+    const banner = s.banner - 1;
+    return { ...s, banner, over: banner === 0 };
+  }
+  let n = { ...s, tick: s.tick + 1, blink: Math.max(0, s.blink - 1) };
+  n = stepShot(n);
+  n = stepEnemyShots(n);
+  if (n.over) return n;
+  n = enemyFire(n, random);
+  n = march(n);
+  if (reachedLoseRow(n)) return { ...n, over: true };
+  if (aliveCount(n) === 0) {
+    const score = n.score + WAVE_BONUS * n.lives;
+    if (n.wave === WAVES.length) {
+      return { ...n, score: score + CLEAR_BONUS, banner: BANNER_TICKS };
+    }
+    return { ...n, ...waveStart(n.wave + 1), score };
+  }
+  return n;
+}
+
+// src/games/galaxy/draw.ts
+var SPRITE = { drone: "<o>", brute: "{#}", stinger: "/V\\" };
+var COLOR = { drone: "brightCyan", brute: "brightMagenta", stinger: "brightYellow" };
+var BANNER = "GALAXY CLEARED";
+function drawState(s, screen) {
+  const W2 = screen.width;
+  const H2 = screen.height;
+  const put = (x, y, ch, color, minY = 1) => {
+    if (x < 0 || x >= W2 || y < minY || y >= H2) return;
+    screen.put(x, y, ch, color);
+  };
+  const left = `Wave ${s.wave}/${WAVES.length}   Lives `;
+  screen.text(0, 0, left, "white");
+  screen.text(left.length, 0, "\u2665".repeat(Math.max(0, s.lives)).slice(0, LIVES), "brightRed");
+  const score = `Score ${s.score}`;
+  screen.text(W2 - score.length, 0, score, "white");
+  for (const p of s.debris) put(p.x, p.y, "\u2593", "gray");
+  for (let r = 0; r < ROWS; r++) {
+    const kind = kindOfRow(r);
+    for (let c = 0; c < COLS; c++) {
+      if (!s.alive[r][c]) continue;
+      const e = enemyAt(s, r, c);
+      for (let i = 0; i < SPRITE[kind].length; i++) put(e.x + i, e.y, SPRITE[kind][i], COLOR[kind]);
+    }
+  }
+  if (s.shot) put(s.shot.x, s.shot.y, "\u254E", "brightWhite");
+  for (const p of s.enemyShots) put(p.x, p.y, "\xA6", "brightRed");
+  if (!(s.blink > 0 && s.tick % 2 === 1)) {
+    for (let i = 0; i < 3; i++) put(s.shipX + i, SHIP_Y, "/^\\"[i], "brightGreen");
+  }
+  if (s.banner > 0) {
+    const x = Math.floor((W2 - BANNER.length) / 2);
+    for (let i = 0; i < BANNER.length; i++) put(x + i, 9, BANNER[i], "brightYellow");
+  }
+}
+
+// src/games/galaxy/index.ts
+var MAX_SCORE = WAVES.length * COLS * (POINTS.drone + 2 * POINTS.brute + POINTS.stinger) + WAVES.length * WAVE_BONUS * LIVES + CLEAR_BONUS;
+var galaxy = {
+  id: "galaxy",
+  title: "Galaxy",
+  description: "Clear 5 waves of invaders. 3 lives. Good luck at wave 5.",
+  tickMs: 50,
+  controls: "\u2190\u2192 move  Space fire",
+  length: { kind: "rounds", minutes: 3 },
+  maxScore: MAX_SCORE,
+  init: () => initState(),
+  onKey: onKey3,
+  update: (s, ctx) => step(s, ctx.random),
+  draw: drawState,
+  score: (s) => s.score,
+  isOver: (s) => s.over
+};
+var galaxy_default = galaxy;
+
 // src/games/rail-dash/index.ts
 var PLAYER_ROW = 17;
 var ACTION_TICKS = 22;
@@ -2242,7 +2679,7 @@ var trainAt = (things, lane, row) => things.some((t) => t.kind === "train" && t.
 function init3(_ctx) {
   return { lane: 1, air: 0, roll: 0, up: false, things: [], distance: 0, coins: 0, tick: 0, nextWave: 8, safeLane: 1, over: false };
 }
-function onKey3(s, key) {
+function onKey4(s, key) {
   if (s.over) return s;
   switch (key) {
     case "left":
@@ -2373,7 +2810,7 @@ var railDash = {
   tickMs: 40,
   controls: "\u2190\u2192 \u2191jump \u2193roll",
   init: init3,
-  onKey: onKey3,
+  onKey: onKey4,
   update: update3,
   draw: draw3,
   score: (s) => s.distance + s.coins * COIN_POINTS,
@@ -2385,7 +2822,7 @@ var rail_dash_default = railDash;
 var TARGETS = ["up", "down", "left", "right", "a", "s", "d", "f", "j", "k", "l"];
 var SYMBOL = { up: "\u2191", down: "\u2193", left: "\u2190", right: "\u2192" };
 var TICK_MS2 = 50;
-var GAP_MS = 250;
+var GAP_MS2 = 250;
 var RUN_MS = 6e4;
 var LIFE_START = 1500;
 var LIFE_MIN = 450;
@@ -2404,7 +2841,7 @@ function init4(_ctx) {
     y: 0,
     prevX: -1,
     prevY: -1,
-    gapLeft: GAP_MS,
+    gapLeft: GAP_MS2,
     timeLeft: 0,
     lifetime: LIFE_START,
     score: 0,
@@ -2417,7 +2854,7 @@ function init4(_ctx) {
   };
 }
 function toGap(s, flash) {
-  return { ...s, flash, target: null, prevX: s.x, prevY: s.y, gapLeft: GAP_MS, timeLeft: 0 };
+  return { ...s, flash, target: null, prevX: s.x, prevY: s.y, gapLeft: GAP_MS2, timeLeft: 0 };
 }
 function miss(s) {
   return toGap({
@@ -2425,9 +2862,9 @@ function miss(s) {
     misses: s.misses + 1,
     streak: 0,
     lifetime: Math.min(LIFE_START, s.lifetime + LIFE_MISS)
-  }, { kind: "miss", x: s.x, y: s.y, n: 0, msLeft: GAP_MS });
+  }, { kind: "miss", x: s.x, y: s.y, n: 0, msLeft: GAP_MS2 });
 }
-function onKey4(s, key) {
+function onKey5(s, key) {
   if (s.over || s.target === null) return s;
   if (!TARGETS.includes(key)) return s;
   if (key !== s.target) return miss(s);
@@ -2440,7 +2877,7 @@ function onKey4(s, key) {
     hits: s.hits + 1,
     score: s.score + gained,
     lifetime: Math.max(LIFE_MIN, s.lifetime - LIFE_HIT)
-  }, { kind: "hit", x: s.x, y: s.y, n: gained, msLeft: GAP_MS });
+  }, { kind: "hit", x: s.x, y: s.y, n: gained, msLeft: GAP_MS2 });
 }
 function spawn2(s, ctx) {
   const target = TARGETS[Math.floor(ctx.random() * TARGETS.length)];
@@ -2508,7 +2945,7 @@ var reflex = {
   controls: "\u2190\u2191\u2192\u2193 a s d f j k l",
   length: { kind: "timed", minutes: 1 },
   init: init4,
-  onKey: onKey4,
+  onKey: onKey5,
   update: update4,
   draw: draw4,
   score: (s) => s.score,
@@ -2671,7 +3108,7 @@ function aiShot(s, rnd) {
 function init5(ctx) {
   return newRound(1, 0, ctx.random, "Aim with the arrows, Space to fire.");
 }
-function onKey5(s, key) {
+function onKey6(s, key) {
   if (s.phase.kind !== "aim") return s;
   const p = s.player;
   switch (key) {
@@ -2784,7 +3221,7 @@ var tankDuel = {
   tickMs: 40,
   controls: "\u2190\u2192\u2191\u2193 Spc fire",
   init: init5,
-  onKey: onKey5,
+  onKey: onKey6,
   update: update5,
   draw: draw5,
   score: (s) => s.score,
@@ -2827,7 +3264,7 @@ function init6(ctx) {
     tick: 0
   };
 }
-function onKey6(state, key) {
+function onKey7(state, key) {
   if (key === "space") return { ...state, turbo: !state.turbo };
   if (key !== "up" && key !== "down" && key !== "left" && key !== "right") return state;
   if (key === OPPOSITE[state.moved]) return state;
@@ -2837,8 +3274,8 @@ function update6(prev2, ctx) {
   const state = { ...prev2, tick: prev2.tick + 1 };
   if (!state.turbo && state.tick % 2 === 1) return state;
   const head = state.body[0];
-  const step = STEP[state.pending];
-  const next = { x: head.x + step.x, y: head.y + step.y };
+  const step2 = STEP[state.pending];
+  const next = { x: head.x + step2.x, y: head.y + step2.y };
   if (next.x < 0 || next.x >= BOARD_W2 || next.y < 0 || next.y >= BOARD_H2) {
     return { ...state, over: true };
   }
@@ -2890,7 +3327,7 @@ var worm = {
   // 29 x 18 cells x 10 points per dot (an upper bound; the worm starts on some cells)
   length: { kind: "open", minutes: 3 },
   init: init6,
-  onKey: onKey6,
+  onKey: onKey7,
   update: update6,
   draw: draw6,
   score: (s) => s.score,
@@ -2899,7 +3336,7 @@ var worm = {
 var worm_default = worm;
 
 // src/games/registry.generated.ts
-var games = [block_drop_default, drift_default, rail_dash_default, reflex_default, tank_duel_default, worm_default];
+var games = [block_drop_default, drift_default, galaxy_default, rail_dash_default, reflex_default, tank_duel_default, worm_default];
 
 // src/arcade.ts
 if (!process.stdout.isTTY || !process.stdin.isTTY) {
@@ -2912,7 +3349,7 @@ try {
 }
 var cfg = onlineConfig(process.env);
 var online = cfg ? new Online({ ...cfg, accountFile: accountFile(), outboxFile: outboxFile() }) : void 0;
-var app = new App({ games, scoresFile: scoresFile(), runsFile: runsFile(), nowMs: Date.now(), startGameId: process.argv[2], online });
+var app = new App({ games, scoresFile: scoresFile(), runsFile: runsFile(), nowMs: Date.now(), startGameId: process.argv[2], online, settingsFile: settingsFile() });
 var watcher = new EventWatcher(eventsFile(), (ev) => app.onEvent(ev, Date.now()));
 watcher.start();
 try {
