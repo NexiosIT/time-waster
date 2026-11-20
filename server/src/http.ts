@@ -94,7 +94,6 @@ export function createHandler(deps: HandlerDeps): (req: IncomingMessage, res: Se
     if (typeof githubToken !== 'string' || githubToken === '') return { status: 400, body: { error: 'githubToken required' } };
     const date = now();
     const ms = date.getTime();
-    if (!loginGlobalLimit.hit('*', ms)) return { status: 429, body: { error: 'too many logins' } };
     if (trustProxy && !loginIpLimit.hit(clientIp(req), ms)) return { status: 429, body: { error: 'too many logins' } };
     let gh: { id: number; login: string } | null;
     try {
@@ -104,6 +103,8 @@ export function createHandler(deps: HandlerDeps): (req: IncomingMessage, res: Se
     }
     if (!gh) return { status: 401, body: { error: 'GitHub rejected the token' } };
     if (!loginIdLimit.hit(String(gh.id), ms)) return { status: 429, body: { error: 'too many logins' } };
+    // Global limit counts only logins GitHub accepted, so junk tokens cannot lock everyone out.
+    if (!loginGlobalLimit.hit('*', ms)) return { status: 429, body: { error: 'too many logins' } };
     if (upsertPlayer(db, gh, date).blocked) return { status: 403, body: { error: 'blocked' } };
     const token = randomBytes(32).toString('base64url');
     createSession(db, gh.id, sha256(token), date);

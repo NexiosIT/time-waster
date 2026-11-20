@@ -12,7 +12,9 @@ const GH_USERS: Record<string, { id: number; login: string }> = {
 const stubFetch = (async (input: string | URL | Request, init?: RequestInit) => {
   const url = String(input);
   const auth = new Headers(init?.headers).get('authorization') ?? '';
-  const user = GH_USERS[auth.replace(/^Bearer /, '')];
+  const token = auth.replace(/^Bearer /, '');
+  const numbered = /^gh-user-(\d+)$/.exec(token); // gh-user-N -> a distinct GitHub account per N
+  const user = GH_USERS[token] ?? (numbered ? { id: 1000 + Number(numbered[1]), login: `user${numbered[1]}` } : undefined);
   if (url !== 'https://api.github.com/user' || !user) return new Response('{"message":"Bad credentials"}', { status: 401 });
   return Response.json(user);
 }) as typeof fetch;
@@ -138,6 +140,25 @@ describe('http api', () => {
     c.clock.ms += HOUR;
     expect((await post(c, '/v1/login', { githubToken: 'gh-alice' })).status).toBe(200);
   });
+
+  test('failed logins do not count toward the global limit; the 601st accepted login in an hour is 429', async () => {
+    const c = await setup();
+    // Requests run in parallel batches to keep the test fast; the clock is fixed, so order inside a batch doesn't matter.
+    const statuses = async (tokens: string[]) => {
+      const out: number[] = [];
+      for (let i = 0; i < tokens.length; i += 50) {
+        const batch = tokens.slice(i, i + 50).map((t) => post(c, '/v1/login', { githubToken: t }).then((r) => r.status));
+        out.push(...(await Promise.all(batch)));
+      }
+      return out;
+    };
+    expect(new Set(await statuses(Array(601).fill('x')))).toEqual(new Set([401]));
+    expect((await post(c, '/v1/login', { githubToken: 'gh-alice' })).status).toBe(200);
+    expect(new Set(await statuses(Array.from({ length: 599 }, (_, i) => `gh-user-${i + 1}`)))).toEqual(new Set([200]));
+    expect((await post(c, '/v1/login', { githubToken: 'gh-bob' })).status).toBe(429);
+    c.clock.ms += HOUR;
+    expect((await post(c, '/v1/login', { githubToken: 'gh-bob' })).status).toBe(200);
+  }, 30_000);
 
   test('per-IP login limit applies only with trustProxy and uses the first X-Forwarded-For entry', async () => {
     // Failed logins count too: the per-IP check runs before GitHub is asked.
