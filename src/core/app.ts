@@ -14,6 +14,9 @@ import { GAME_HEIGHT, GAME_WIDTH, MIN_COLS, MIN_ROWS } from './types';
 import type { Color, Game, GameLength, Key } from './types';
 import type { OnlinePort } from './online/online';
 import { drawAccount, drawMenuHint, drawSignIn, drawWorld } from './onlineScreens';
+import { Heckler } from './heckler';
+import { createRandom } from './random';
+import { loadSettings, saveSettings } from './settings';
 
 export interface AppOptions {
   games: Game<any>[];
@@ -24,6 +27,8 @@ export interface AppOptions {
   startGameId?: string;
   /** Absent: no online UI at all. */
   online?: OnlinePort;
+  /** Player settings (heckling on/off). Absent: no heckling and no H toggle. */
+  settingsFile?: string;
 }
 
 type ScreenName = 'menu' | 'playing' | 'results' | 'crashed' | 'signin' | 'account';
@@ -59,6 +64,10 @@ export class App {
   private confirmDelete = false;
   private history: Runs = {};
   private clock = new TaskClock();
+  private settingsFile?: string;
+  private heckleOn = false;
+  private heckler: Heckler;
+  private runLine: string | null = null;
 
   constructor(opts: AppOptions) {
     const seen = new Set<string>();
@@ -73,6 +82,9 @@ export class App {
     this.runsFile = opts.runsFile;
     this.seed = opts.seed ?? Date.now();
     this.online = opts.online;
+    this.heckler = new Heckler(createRandom(this.seed ^ 0x5eed));
+    this.settingsFile = opts.settingsFile;
+    if (this.settingsFile) this.heckleOn = loadSettings(this.settingsFile).heckle;
     this.refreshBest();
     this.preselect(opts.nowMs);
     const start = opts.startGameId ? this.games.find((g) => g.id === opts.startGameId) : undefined;
@@ -92,6 +104,7 @@ export class App {
         else if (k === 'down' && this.games.length) this.sel = (this.sel + 1) % this.games.length;
         else if (k === 'enter' && this.games[this.sel]) this.start(this.games[this.sel], nowMs);
         else if (k === 'o' && this.online) this.openOnline();
+        else if (k === 'h' && this.settingsFile) this.toggleHeckling();
         break;
       case 'signin':
         if (k === 'escape') {
@@ -137,7 +150,31 @@ export class App {
   tick(nowMs: number): void {
     if (this.screen !== 'playing') return;
     this.session!.tick(nowMs);
+    this.heckle(nowMs);
     this.afterRun();
+  }
+
+  private toggleHeckling(): void {
+    this.heckleOn = !this.heckleOn;
+    try {
+      saveSettings(this.settingsFile!, { heckle: this.heckleOn });
+    } catch {
+      // keeps working for this session; not remembered
+    }
+  }
+
+  private heckle(nowMs: number): void {
+    const s = this.session;
+    if (!this.heckleOn || !s || s.status !== 'playing') return;
+    const g = this.game!;
+    this.heckler.tick({
+      nowMs,
+      playedMs: s.playedMs,
+      score: s.score,
+      best: this.best.get(g.id) ?? null,
+      expectedMs: g.length ? expectedLength(g.length, this.history[g.id] ?? []).ms : null,
+      game: g.title,
+    });
   }
 
   /** done/attention go to the banner; every event feeds the task clock. */
@@ -163,6 +200,10 @@ export class App {
     const view = this.banner.view(nowMs);
     const bcolor = this.banner.color();
     if (view?.mode === 'full') buf.text(0, 0, clip(view.text, cols), bcolor);
+    else if (this.heckleOn && this.screen === 'playing') {
+      const line = this.heckler.current(nowMs);
+      if (line) buf.text(0, 0, clip(line, cols), 'brightMagenta');
+    }
 
     // Signed out elsewhere (sign-out, revoked session): the account screen has nothing to show.
     if (this.screen === 'account' && !this.online!.account()) this.toMenu(nowMs);
@@ -193,6 +234,7 @@ export class App {
     this.game = game;
     this.results = null;
     this.session = new GameSession(game, { seed: this.seed + this.runs++, nowMs });
+    this.heckler.startRun();
     this.screen = 'playing';
     this.afterRun();
   }
@@ -289,10 +331,15 @@ export class App {
 
   private finish(score: number): void {
     const id = this.game!.id;
+    const prevBest = this.best.get(id) ?? null;
+    this.runLine = null;
     try {
       const r = addScore(this.scoresFile, id, score);
       this.results = { score, isBest: r.isBest, top: r.top, saveFailed: false };
       if (r.top.length) this.best.set(id, Math.max(...r.top.map((e) => e.score)));
+      if (this.heckleOn) {
+        this.runLine = this.heckler.runOver({ score, best: r.isBest ? score : prevBest, isBest: r.isBest, game: this.game!.title });
+      }
     } catch {
       this.results = { score, isBest: false, top: [], saveFailed: true };
     }
@@ -345,6 +392,10 @@ export class App {
       });
       area.text(0, 17, clip(this.games[this.sel].description, GAME_WIDTH), 'gray');
       if (online) drawMenuHint(area, online.account());
+      if (this.settingsFile) {
+        const hint = `H: heckling ${this.heckleOn ? 'on' : 'off'}`;
+        area.text(GAME_WIDTH - hint.length, 18, hint, 'gray');
+      }
     } else if (this.screen === 'results' && this.results) {
       const r = this.results;
       centre(1, `${this.game!.title} — Score ${r.score}`, 'brightWhite');
@@ -352,7 +403,10 @@ export class App {
       if (r.saveFailed) centre(3, "Couldn't save score", 'brightRed');
       const online = this.online;
       if (online && this.worldTab) drawWorld(area, online.board(this.game!.id), !!online.account());
-      else r.top.forEach((e, i) => centre(5 + i, `${String(i + 1).padStart(2)}. ${e.score}`));
+      else {
+        r.top.forEach((e, i) => centre(5 + i, `${String(i + 1).padStart(2)}. ${e.score}`));
+        if (this.runLine) centre(16, this.runLine, 'brightMagenta');
+      }
       centre(18, `Enter: play again · Esc: menu${online ? ' · Tab: You / World' : ''}`, 'gray');
     } else if (this.screen === 'signin') {
       drawSignIn(area, this.online!.signIn());
