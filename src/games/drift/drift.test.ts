@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createRandom } from '../../core/random';
 import type { GameContext } from '../../core/types';
 import { isBlocked, type Point } from './arena';
-import { angleDiff, headingAngle, START_SPEED } from './physics';
+import { angleDiff, COINS_TO_MAX, headingAngle, speedForCoins, START_SPEED, TICK_MS } from './physics';
 import drift, { cellOf, TRAIL_LEN, type DriftState } from './index';
 
 const ctx = (seed = 1): GameContext => ({ random: createRandom(seed), elapsedMs: 0 });
@@ -113,6 +113,31 @@ describe('drift', () => {
     for (let i = 0; i < 100 && !s.crashed && s.x <= 30; i++) s = drift.update(s, c);
     expect(s.crashed).toBe(true);
     expect(cellOf(s).y).toBeLessThanOrEqual(12);
+  });
+
+  describe('sub-stepping at max speed (horizontal, > 1 cell per tick)', () => {
+    const offsets = Array.from({ length: 10 }, (_, i) => 16 + i / 10);
+    const run = (over: Partial<DriftState>, stop: (s: DriftState) => boolean): DriftState => {
+      const c = ctx();
+      let s = open({ y: 10, coins: COINS_TO_MAX, heading: 0, travel: 0, ...over });
+      for (let i = 0; i < 100 && !stop(s); i++) s = drift.update(s, c);
+      return s;
+    };
+
+    it('moves more than one cell per tick (guard)', () => {
+      expect(speedForCoins(COINS_TO_MAX) * TICK_MS / 1000).toBeGreaterThan(1);
+    });
+
+    it.each(offsets)('cannot tunnel through a 1-column pillar from x=%f', (x) => {
+      const s = run({ x, pillars: [{ x: 19, y: 10, w: 1, h: 1 }] }, (t) => t.crashed || t.x > 30);
+      expect(s.crashed).toBe(true);
+      expect(cellOf(s).x).toBe(19);
+    });
+
+    it.each(offsets)('cannot skip a coin from x=%f', (x) => {
+      const s = run({ x, pillars: [], coin: { x: 19, y: 10 } }, (t) => t.coins > COINS_TO_MAX || t.crashed || t.x > 30);
+      expect(s.coins).toBe(COINS_TO_MAX + 1); // coin collected, not skipped
+    });
   });
 
   it('crash wins over a coin in the same cell', () => {

@@ -1,6 +1,5 @@
-import { GAME_HEIGHT, GAME_WIDTH } from '../../core/types';
-import type { Game, GameContext, Key, Screen } from '../../core/types';
-import { generatePillars, inRect, isBlocked, spawnCoin, START, type Point, type Rect } from './arena';
+import { GAME_HEIGHT, GAME_WIDTH, type Game, type GameContext, type Key, type Screen } from '../../core/types';
+import { generatePillars, isBlocked, spawnCoin, START, type Point, type Rect } from './arena';
 import {
   gripFor, headingAngle, isDrifting, rotateHeading, speedForCoins, TICK_MS, turnToward,
 } from './physics';
@@ -75,7 +74,7 @@ function draw(state: DriftState, screen: Screen): void {
 
   for (const r of state.pillars) {
     for (let y = r.y; y < r.y + r.h; y++)
-      for (let x = r.x; x < r.x + r.w; x++) if (inRect({ x, y }, r)) screen.put(x, y, '█', 'blue');
+      for (let x = r.x; x < r.x + r.w; x++) screen.put(x, y, '█', 'blue');
   }
 
   const car = cellOf(state);

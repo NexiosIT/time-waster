@@ -68,6 +68,7 @@ export function generatePillars(ctx: GameContext): Rect[] {
   return FALLBACK_PILLARS.map((p) => ({ ...p }));
 }
 
+// Generated layouts (including the fallback) always leave legal cells, so the pool is never empty.
 export function spawnCoin(car: Point, pillars: Rect[], ctx: GameContext): Point {
   const candidates: Point[] = [];
   for (let y = 1; y < GAME_HEIGHT - 1; y++) {
