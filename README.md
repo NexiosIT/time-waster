@@ -107,7 +107,9 @@ Scores are per machine and nothing is sent anywhere, unless you join the online 
 ## Online high scores
 
 The leaderboards are also on the web: <https://lobster-app-di8o6.ondigitalocean.app/>
-(one page per game, with a few kind words for whoever is on top).
+(one page per game, with a few kind words for whoever is on top). You can also play every
+game right there in the browser (`▶ Play`) and save a score under a typed name on the
+separate Web board; see [server/README.md](server/README.md#play-in-the-browser).
 
 Sharing scores is opt-in. Until you sign in, the arcade only downloads leaderboards (the
 world best per game, shown next to your own best) and sends no score or name.
