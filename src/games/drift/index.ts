@@ -93,6 +93,12 @@ export function spawnAvoid(state: DriftState): Rect[] {
   return rects;
 }
 
+/** A pending shuffle layout minus one pillar (the destroyed one if it is in there), so a Shield kill is not undone by the swap. */
+function dropOne(layout: Rect[], destroyed: Rect): Rect[] {
+  const i = layout.findIndex((r) => r.x === destroyed.x && r.y === destroyed.y && r.w === destroyed.w && r.h === destroyed.h);
+  return layout.filter((_, j) => j !== Math.max(i, 0));
+}
+
 const speedNow = (s: DriftState): number => speedForCoins(s.coins) * modifiers(s.effects).speedMul;
 
 /** Pillars a new pickup needs clearance from: solid ones plus those about to appear (pending, pending shuffle). */
@@ -129,7 +135,10 @@ function update(state: DriftState, ctx: GameContext): DriftState {
     const hit = st.pillars.find((r) => inRect(cell, r));
     if (hit) {
       if (!hasEffect(st.effects, 'shield')) { crashed = true; break; }
-      st = { ...st, pillars: st.pillars.filter((r) => r !== hit), effects: removeEffect(st.effects, 'shield') };
+      st = {
+        ...st, pillars: st.pillars.filter((r) => r !== hit), effects: removeEffect(st.effects, 'shield'),
+        shuffle: st.shuffle && { ...st.shuffle, pillars: dropOne(st.shuffle.pillars, hit) },
+      };
     }
     const extra = st.extraCoins.findIndex((p) => samePoint(p, cell));
     if (extra >= 0) {
@@ -150,7 +159,7 @@ function update(state: DriftState, ctx: GameContext): DriftState {
       }
     }
     if (st.powerUp && samePoint(cell, st.powerUp.at)) {
-      st = applyPower(st, st.powerUp.kind, ctx);
+      st = applyPower({ ...st, x, y, travel }, st.powerUp.kind, ctx); // current sub-step position
       st = { ...st, powerUp: null, nextPowerAt: st.scheduleCoins + nextPowerGap(ctx) };
     }
     if (st.trail.length === 0 || !samePoint(st.trail[0], cell)) {
@@ -181,19 +190,23 @@ function resolveShuffle(st: DriftState): DriftState {
   return { ...st, pillars: st.shuffle.pillars.filter((p) => !blocked.some((b) => intersects(p, b))), shuffle: null };
 }
 
-/** Counts pending obstacles down; at 0 they turn solid unless the car's zone is on them. */
+/** Counts pending obstacles down; at 0 they turn solid unless the car's zone is on them. A new pillar also joins a pending shuffle layout. */
 function resolvePending(st: DriftState): DriftState {
   if (st.pending.length === 0) return st;
   const zone = carZone(st.x, st.y, st.travel);
   const pending: Pending[] = [];
   const pillars = [...st.pillars];
   const oil = [...st.oil];
+  const solidified: Rect[] = [];
   for (const p of st.pending) {
     const ticksLeft = Math.max(0, p.ticksLeft - 1);
     if (ticksLeft > 0 || zone.some((z) => intersects(z, p.rect))) pending.push({ ...p, ticksLeft });
-    else (p.kind === 'pillar' ? pillars : oil).push(p.rect);
+    else if (p.kind === 'pillar') { pillars.push(p.rect); solidified.push(p.rect); }
+    else oil.push(p.rect);
   }
-  return { ...st, pending, pillars, oil };
+  const shuffle = st.shuffle && solidified.length > 0
+    ? { ...st.shuffle, pillars: [...st.shuffle.pillars, ...solidified] } : st.shuffle;
+  return { ...st, pending, pillars, oil, shuffle };
 }
 
 const READOUT_MAX_X = 57;

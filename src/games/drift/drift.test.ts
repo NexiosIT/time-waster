@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createRandom } from '../../core/random';
 import type { GameContext } from '../../core/types';
-import { clearanceFor, grown, inRect, intersects, isBlocked, spawnCoin, START as START_CELL, type Point, type Rect } from './arena';
+import { carZone, clearanceFor, grown, inRect, intersects, isBlocked, spawnCoin, START as START_CELL, type Point, type Rect } from './arena';
 import { MAX_OIL, MAX_PILLARS, SHUFFLE_TICKS, WARN_TICKS } from './obstacles';
 import { angleDiff, COINS_TO_MAX, GRIP_SLOW, headingAngle, speedForCoins, START_SPEED, TICK_MS } from './physics';
 import { hasEffect } from './effects';
@@ -547,6 +547,53 @@ describe('drift growing arena', () => {
       expect(s.pillars).toContainEqual(NEW);
       expect(s.crashed).toBe(false);
       expect(s.shuffle).toBeNull();
+    });
+
+    it('a pending pillar that turns solid during the shuffle window survives the swap', () => {
+      const P: Rect = { x: 50, y: 15, w: 2, h: 1 };
+      let s = open({ pillars: [OLD], shuffle: { pillars: [NEW], ticksLeft: 5 }, pending: [{ kind: 'pillar', rect: P, ticksLeft: 2 }] });
+      for (let i = 0; i < 5; i++) s = drift.update(still(s), ctx());
+      expect(s.shuffle).toBeNull();
+      expect(s.pillars).toEqual(expect.arrayContaining([NEW, P]));
+      expect(s.pillars).toHaveLength(2);
+    });
+
+    it('a pillar the shield destroys during the window does not come back at the swap', () => {
+      const hit: Rect = { x: 32, y: 9, w: 2, h: 3 };
+      const other: Rect = { x: 30, y: 16, w: 2, h: 1 };
+      let s = open({
+        x: 31.7, pillars: [hit, OLD], effects: [{ kind: 'shield', ticksLeft: 100 }],
+        shuffle: { pillars: [NEW, other], ticksLeft: 3 },
+      });
+      s = drift.update(s, ctx());
+      expect(s.pillars).toEqual([OLD]);
+      for (let i = 0; i < 2; i++) s = drift.update(still(s), ctx());
+      expect(s.shuffle).toBeNull();
+      expect(s.pillars).toHaveLength(1);
+    });
+
+    it('picking up Shuffle through update queues a new layout and keeps the old pillars solid', () => {
+      const s = drift.update(open({
+        x: 30.6, pillars: [OLD], nextPowerAt: null, powerUp: { kind: 'shuffle', at: { x: 31, y: 10 }, ticksLeft: 100 },
+      }), ctx());
+      expect(s.shuffle).not.toBeNull();
+      expect(s.shuffle!.ticksLeft).toBeGreaterThanOrEqual(SHUFFLE_TICKS - 1);
+      expect(s.pillars).toEqual([OLD]);
+      expect(s.powerUp).toBeNull();
+    });
+
+    it('Shuffle picked up mid-tick keeps clear of the car zone at the pickup sub-step', () => {
+      const olds: Rect[] = [4, 12, 20, 28, 36, 44, 52].map((x) => ({ x, y: 16, w: 2, h: 1 }));
+      for (let seed = 1; seed <= 200; seed++) {
+        // Max speed + nitro: 1.8 cells per tick in 2 sub-steps; the pickup is on the 2nd (x = 31.8).
+        const s = drift.update(open({
+          x: 30, coins: 20, pillars: olds, effects: [{ kind: 'nitro', ticksLeft: 100 }], nextPowerAt: null,
+          powerUp: { kind: 'shuffle', at: { x: 32, y: 10 }, ticksLeft: 100 },
+        }), ctx(seed));
+        expect(s.shuffle).not.toBeNull();
+        const zone = carZone(s.x, s.y, s.travel);
+        for (const p of s.shuffle!.pillars) expect(zone.some((z) => intersects(z, p)), `seed ${seed}`).toBe(false);
+      }
     });
   });
 });

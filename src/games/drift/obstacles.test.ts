@@ -33,6 +33,21 @@ describe('newObstacle', () => {
     for (let seed = 1; seed <= 100; seed++) expect(newObstacle(pillarFull, ctx(seed))?.kind).not.toBe('pillar');
   });
 
+  it('falls back to oil when pillars are capped but oil is allowed', () => {
+    const rect = { x: 3, y: 3, w: 1, h: 1 };
+    const pillars = Array.from({ length: MAX_PILLARS }, () => rect);
+    for (let seed = 1; seed <= 100; seed++) {
+      expect(newObstacle({ ...none, pillars, coins: OIL_FROM }, ctx(seed))?.kind).toBe('oil');
+    }
+  });
+
+  it('a pending shuffle layout counts toward the pillar cap', () => {
+    const rect = { x: 3, y: 3, w: 1, h: 1 };
+    const pillars = Array.from({ length: 6 }, () => rect);
+    const gapTo = Array.from({ length: MAX_PILLARS }, () => ({ x: 50, y: 15, w: 1, h: 1 }));
+    for (let seed = 1; seed <= 50; seed++) expect(newObstacle({ ...none, pillars, gapTo, coins: 0 }, ctx(seed))).toBeNull();
+  });
+
   it('returns null when full', () => {
     const rect = { x: 3, y: 3, w: 1, h: 1 };
     const full = {
