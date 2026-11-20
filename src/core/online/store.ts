@@ -1,55 +1,11 @@
 import fs from 'node:fs';
+import { readText, withRetry, writeAtomic } from '../fsutil';
 import * as path from 'node:path';
 
 export type Account = { serverUrl: string; token: string; login: string };
 export type OutboxEntry = { game: string; score: number; at: string };
 
 const OUTBOX_MAX = 50;
-const RENAME_TRIES = 5;
-const RENAME_DELAY_MS = 20;
-const TRANSIENT = new Set(['EPERM', 'EBUSY', 'EACCES']);
-
-function sleepSync(ms: number): void {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-}
-
-// Same back-off as scores.ts for transient Windows file errors.
-function withRetry<T>(op: () => T): T {
-  for (let attempt = 1; ; attempt++) {
-    try {
-      return op();
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (!code || !TRANSIENT.has(code) || attempt >= RENAME_TRIES) throw err;
-      sleepSync(RENAME_DELAY_MS);
-    }
-  }
-}
-
-function readText(file: string): string | null {
-  try {
-    return withRetry(() => fs.readFileSync(file, 'utf8'));
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
-    throw err;
-  }
-}
-
-function writeAtomic(file: string, text: string): void {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = `${file}.${process.pid}.tmp`;
-  try {
-    fs.writeFileSync(tmp, text);
-    withRetry(() => fs.renameSync(tmp, file));
-  } catch (err) {
-    try {
-      fs.rmSync(tmp, { force: true });
-    } catch {
-      // ignore
-    }
-    throw err;
-  }
-}
 
 function isAccount(d: unknown): d is Account {
   if (typeof d !== 'object' || d === null) return false;
