@@ -24,3 +24,4 @@
 - tokyo 22
 - tokyo 23
 - tokyo 24
+- tokyo 25
