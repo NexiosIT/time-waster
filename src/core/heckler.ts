@@ -1,11 +1,12 @@
-import { BEHIND, NO_BEST, RUN_BEST, RUN_WORSE, STUCK, fill } from './heckles';
+import { AHEAD, BEHIND, NO_BEST, RUN_BEST, RUN_WORSE, START, STUCK, fill } from './heckles';
 
-export const CHECK_MS = 45_000;   // how often (in play time) to compare against your best
-export const STUCK_MS = 45_000;   // play time without a score change before a "stuck" jab
-export const SHOW_MS = 6_000;     // how long a line stays up
-export const GAP_MS = 20_000;     // minimum wall-clock time between lines
+export const FIRST_MS = 8_000;    // play time before the opening jab of every run
+export const CHECK_MS = 20_000;   // how often (in play time) to compare against your best
+export const STUCK_MS = 20_000;   // play time without a score change before a "stuck" jab
+export const SHOW_MS = 5_000;     // how long a line stays up
+export const GAP_MS = 12_000;     // minimum wall-clock time between lines
 export const BEHIND_RATIO = 0.6;  // below this share of your best pace counts as behind
-const NO_BEST_CHANCE = 0.5;
+const CHANCE = 0.5;               // how often a checkpoint jabs when ahead, or with no best yet
 
 export interface HeckleTick {
   nowMs: number;
@@ -24,6 +25,7 @@ export class Heckler {
   private shownAt = -Infinity;
   private lastLineAt = -Infinity;
   private nextCheck = CHECK_MS;
+  private opened = false;
   private lastScore: number | null = null;
   private lastChange = 0;
 
@@ -33,6 +35,7 @@ export class Heckler {
     this.line = null;
     this.shownAt = -Infinity;
     this.nextCheck = CHECK_MS;
+    this.opened = false;
     this.lastScore = null;
     this.lastChange = 0;
   }
@@ -42,12 +45,17 @@ export class Heckler {
     this.lastScore = i.score;
 
     let pool: string[] | null = null;
-    if (i.playedMs >= this.nextCheck) {
+    if (!this.opened && i.playedMs >= FIRST_MS) {
+      this.opened = true;
+      pool = START;
+    } else if (i.playedMs >= this.nextCheck) {
       while (this.nextCheck <= i.playedMs) this.nextCheck += CHECK_MS;
       if (i.best !== null && i.best > 0) {
         const share = i.expectedMs ? Math.min(1, i.playedMs / i.expectedMs) : 0.5;
-        if (i.score < BEHIND_RATIO * i.best * share) pool = BEHIND;
-      } else if (i.best === null && this.rnd() >= NO_BEST_CHANCE) pool = NO_BEST;
+        const target = i.best * share;
+        if (i.score < BEHIND_RATIO * target) pool = BEHIND;
+        else if (i.score >= target && this.rnd() >= CHANCE) pool = AHEAD;
+      } else if (i.best === null && this.rnd() >= CHANCE) pool = NO_BEST;
     }
     if (!pool && i.playedMs - this.lastChange >= STUCK_MS) {
       pool = STUCK;
