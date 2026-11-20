@@ -277,10 +277,13 @@ function loadJson(file, isValid3) {
   return null;
 }
 function writeAtomic(file, data) {
+  writeTextAtomic(file, JSON.stringify(data, null, 2));
+}
+function writeTextAtomic(file, text) {
   import_node_fs.default.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = `${file}.${process.pid}.tmp`;
   try {
-    import_node_fs.default.writeFileSync(tmp, JSON.stringify(data, null, 2));
+    import_node_fs.default.writeFileSync(tmp, text);
     withRetry(() => import_node_fs.default.renameSync(tmp, file));
   } catch (err) {
     try {
@@ -394,6 +397,9 @@ var NEW_X = 43;
 var STAR_X = 47;
 var BEST_X = 49;
 var BEST_W = 11;
+var ONLINE_BEST_X = 49;
+var ONLINE_WORLD_X = 55;
+var NUM_W = 5;
 function taskLine(view, sugg) {
   switch (view.state) {
     case "none":
@@ -423,8 +429,25 @@ function rowSegments(r) {
   if (len) segs.push({ x: LEN_X, text: clip(len, LEN_W), color: "gray" });
   if (r.expected?.isNew) segs.push({ x: NEW_X, text: "NEW", color: "brightGreen" });
   if (r.suggested) segs.push({ x: STAR_X, text: "\u2605", color: "brightYellow" });
-  segs.push({ x: BEST_X, text: clip(`Best ${r.best}`, BEST_W), color: "gray" });
+  if (r.world === void 0) {
+    segs.push({ x: BEST_X, text: clip(`Best ${r.best}`, BEST_W), color: "gray" });
+  } else {
+    segs.push({ x: ONLINE_BEST_X, text: shortNumber(r.best), color: "gray" });
+    segs.push({ x: ONLINE_WORLD_X, text: shortNumber(r.world), color: "gray" });
+  }
   return segs;
+}
+function shortNumber(s) {
+  const n = Number(s);
+  if (!/^\d+$/.test(s) || s.length <= NUM_W) return clip(s, NUM_W);
+  if (n < 1e6) return `${Math.floor(n / 1e3)}k`;
+  return clip(`${(Math.floor(n / 1e5) / 10).toFixed(1)}M`, NUM_W);
+}
+function onlineHeader() {
+  return [
+    { x: ONLINE_BEST_X, text: "Best", color: "gray" },
+    { x: ONLINE_WORLD_X, text: "World", color: "gray" }
+  ];
 }
 function clip(s, n) {
   return n <= 0 ? "" : s.length > n ? s.slice(0, n) : s;
@@ -457,8 +480,58 @@ function addScore(file, gameId, score, at = /* @__PURE__ */ new Date()) {
   return { rank: idx < TOP_N ? idx + 1 : null, isBest, top };
 }
 
+// src/core/onlineScreens.ts
+var LOGIN_MAX = 39;
+function clip2(s, n) {
+  return n <= 0 ? "" : s.length > n ? s.slice(0, n) : s;
+}
+function clean(s, max = GAME_WIDTH) {
+  return clip2(String(s).replace(new RegExp("\\p{Cc}+", "gu"), " "), max);
+}
+function centre(area, y, s, c = "white") {
+  area.text(Math.max(0, Math.floor((GAME_WIDTH - s.length) / 2)), y, clip2(s, GAME_WIDTH), c);
+}
+function drawMenuHint(area, account) {
+  const s = account ? `Online as ${clip2(clean(account.login), GAME_WIDTH - 23)} \xB7 O: account` : "O: share scores online";
+  centre(area, 19, s, "gray");
+}
+function drawSignIn(area, s) {
+  if (s.phase === "code") {
+    centre(area, 6, `Open ${clean(s.verificationUri)}`, "brightWhite");
+    centre(area, 8, `and enter the code  ${clean(s.userCode)}`, "brightWhite");
+    centre(area, 11, "Waiting for GitHub...", "gray");
+  } else if (s.phase === "done") centre(area, 8, `Signed in as ${clean(s.login, LOGIN_MAX)}`, "brightGreen");
+  else if (s.phase === "failed") centre(area, 8, clean(s.message), "brightRed");
+  else centre(area, 8, "Asking GitHub...", "gray");
+  centre(area, 18, "Esc: back", "gray");
+}
+function drawAccount(area, login, confirming, message = null) {
+  centre(area, 6, `Signed in as ${clean(login, LOGIN_MAX)}`, "brightWhite");
+  centre(area, 9, "S: sign out \xB7 D: sign out and delete my online scores", "gray");
+  centre(area, 10, "Esc: back", "gray");
+  if (confirming) centre(area, 13, "Delete all your online scores? Y/N", "brightYellow");
+  else if (message) {
+    clean(message, 200).split(/(?<=\.) /).slice(0, 3).forEach((line, i) => centre(area, 13 + i, line, "brightYellow"));
+  }
+}
+function drawWorld(area, view, signedIn) {
+  if (view.status === "loading") centre(area, 5, "loading...", "gray");
+  else if (view.status === "offline") centre(area, 5, "offline", "gray");
+  else {
+    const top = view.top.slice(0, 10);
+    const me = view.me;
+    const width = Math.max(0, ...top.map((r) => clean(r.login, LOGIN_MAX).length));
+    top.forEach((r, i) => {
+      const line = `${String(r.rank).padStart(2)}. ${clean(r.login, LOGIN_MAX).padEnd(width)} ${r.score}`;
+      area.text(4, 5 + i, clip2(line, GAME_WIDTH - 4), me && r.rank === me.rank ? "brightYellow" : "white");
+    });
+    if (me && !top.some((r) => r.rank === me.rank)) centre(area, 16, `Your rank: ${me.rank}`, "brightYellow");
+  }
+  if (!signedIn) centre(area, 17, "O in the menu to join", "gray");
+}
+
 // src/core/app.ts
-var ID_RE = /^[a-z0-9-]+$/;
+var ID_RE = /^[a-z0-9-]{1,32}$/;
 var TOO_SMALL = "Make the window bigger";
 var MENU_HINTS = "\u2191\u2193 select \xB7 Enter play \xB7 Q quit";
 var App = class {
@@ -476,6 +549,9 @@ var App = class {
   crash = "";
   tooSmall = false;
   best = /* @__PURE__ */ new Map();
+  online;
+  worldTab = false;
+  confirmDelete = false;
   history = {};
   clock = new TaskClock();
   constructor(opts) {
@@ -490,10 +566,12 @@ var App = class {
     this.scoresFile = opts.scoresFile;
     this.runsFile = opts.runsFile;
     this.seed = opts.seed ?? Date.now();
+    this.online = opts.online;
     this.refreshBest();
     this.preselect(opts.nowMs);
     const start = opts.startGameId ? this.games.find((g) => g.id === opts.startGameId) : void 0;
     if (start) this.start(start, opts.nowMs);
+    else this.online?.refreshWorldBest(opts.nowMs, this.gameIds());
   }
   key(k, nowMs) {
     if (k === "ctrl-c") {
@@ -506,6 +584,16 @@ var App = class {
         if (k === "up" && this.games.length) this.sel = (this.sel + this.games.length - 1) % this.games.length;
         else if (k === "down" && this.games.length) this.sel = (this.sel + 1) % this.games.length;
         else if (k === "enter" && this.games[this.sel]) this.start(this.games[this.sel], nowMs);
+        else if (k === "o" && this.online) this.openOnline();
+        break;
+      case "signin":
+        if (k === "escape") {
+          this.online.cancelSignIn();
+          this.toMenu(nowMs);
+        }
+        break;
+      case "account":
+        this.accountKey(k, nowMs);
         break;
       case "playing":
         if (this.tooSmall && k !== "p" && k !== "escape") break;
@@ -519,6 +607,10 @@ var App = class {
       case "results":
         if (k === "enter" && this.game) this.start(this.game, nowMs);
         else if (k === "escape") this.toMenu(nowMs);
+        else if (k === "tab" && this.online) {
+          this.worldTab = !this.worldTab;
+          if (this.worldTab) this.online.loadBoard(this.game.id);
+        }
         break;
       case "crashed":
         if (k === "enter" || k === "escape") this.toMenu(nowMs);
@@ -558,6 +650,7 @@ var App = class {
     const view = this.banner.view(nowMs);
     const bcolor = this.banner.color();
     if (view?.mode === "full") buf.text(0, 0, clip(view.text, cols), bcolor);
+    if (this.screen === "account" && !this.online.account()) this.toMenu(nowMs);
     const area = new CellBuffer(GAME_WIDTH, GAME_HEIGHT);
     let status = "";
     if (this.screen === "playing") {
@@ -593,6 +686,35 @@ var App = class {
     this.screen = "menu";
     this.refreshBest();
     this.preselect(nowMs);
+    this.online?.refreshWorldBest(nowMs, this.gameIds());
+  }
+  gameIds() {
+    return this.games.map((g) => g.id);
+  }
+  /** Only `account()` says whether we are signed in; `signIn()` may still hold an old phase. */
+  openOnline() {
+    const online2 = this.online;
+    if (online2.account()) {
+      this.confirmDelete = false;
+      online2.clearAccountMessage();
+      this.screen = "account";
+    } else {
+      online2.startSignIn();
+      this.screen = "signin";
+    }
+  }
+  accountKey(k, nowMs) {
+    const online2 = this.online;
+    if (this.confirmDelete) {
+      if (k === "y") {
+        online2.signOut(true);
+        this.confirmDelete = false;
+      } else if (k === "n" || k === "escape") this.confirmDelete = false;
+    } else if (k === "escape") this.toMenu(nowMs);
+    else if (k === "s") {
+      online2.signOut(false);
+      this.toMenu(nowMs);
+    } else if (k === "d") this.confirmDelete = true;
   }
   applyToClock(events, nowMs) {
     const before = this.suggestedId(nowMs);
@@ -645,6 +767,9 @@ var App = class {
     } catch {
       this.results = { score, isBest: false, top: [], saveFailed: true };
     }
+    this.online?.recordRun(id, score, /* @__PURE__ */ new Date());
+    this.online?.loadBoard(id);
+    this.worldTab = false;
     this.session = null;
     this.screen = "results";
   }
@@ -666,34 +791,45 @@ var App = class {
     }
   }
   drawScreen(area, nowMs) {
-    const centre = (y, s, c = "white") => area.text(Math.max(0, Math.floor((GAME_WIDTH - s.length) / 2)), y, clip(s, GAME_WIDTH), c);
+    const centre2 = (y, s, c = "white") => area.text(Math.max(0, Math.floor((GAME_WIDTH - s.length) / 2)), y, clip(s, GAME_WIDTH), c);
     if (this.screen === "menu") {
-      centre(1, "ARCADE", "brightCyan");
+      centre2(1, "ARCADE", "brightCyan");
       if (!this.games.length) {
-        centre(5, "No games yet", "gray");
+        centre2(5, "No games yet", "gray");
         return;
       }
+      const online2 = this.online;
       const sid = this.suggestedId(nowMs);
       const expected = (g) => g.length ? expectedLength(g.length, this.history[g.id] ?? []) : null;
       const sg = sid === null ? void 0 : this.games.find((g) => g.id === sid);
       const sugg = sg ? { title: sg.title, expected: expected(sg) } : null;
-      centre(2, taskLine(this.clock.view(nowMs), sugg), "brightYellow");
+      centre2(2, taskLine(this.clock.view(nowMs), sugg), "brightYellow");
+      if (online2) for (const seg of onlineHeader()) area.text(seg.x, 3, seg.text, seg.color);
       this.games.forEach((g, i) => {
         const best = this.best.has(g.id) ? String(this.best.get(g.id)) : "-";
-        const row = { selected: i === this.sel, title: g.title, expected: expected(g), suggested: g.id === sid, best };
+        const wb = online2?.worldBest(g.id);
+        const world = online2 ? wb ? String(wb.score) : "-" : void 0;
+        const row = { selected: i === this.sel, title: g.title, expected: expected(g), suggested: g.id === sid, best, world };
         for (const seg of rowSegments(row)) area.text(seg.x, 4 + i, seg.text, seg.color);
       });
       area.text(0, 17, clip(this.games[this.sel].description, GAME_WIDTH), "gray");
+      if (online2) drawMenuHint(area, online2.account());
     } else if (this.screen === "results" && this.results) {
       const r = this.results;
-      centre(1, `${this.game.title} \u2014 Score ${r.score}`, "brightWhite");
-      if (r.isBest) centre(3, "New best!", "brightGreen");
-      if (r.saveFailed) centre(3, "Couldn't save score", "brightRed");
-      r.top.forEach((e, i) => centre(5 + i, `${String(i + 1).padStart(2)}. ${e.score}`));
-      centre(18, "Enter: play again \xB7 Esc: menu", "gray");
+      centre2(1, `${this.game.title} \u2014 Score ${r.score}`, "brightWhite");
+      if (r.isBest) centre2(3, "New best!", "brightGreen");
+      if (r.saveFailed) centre2(3, "Couldn't save score", "brightRed");
+      const online2 = this.online;
+      if (online2 && this.worldTab) drawWorld(area, online2.board(this.game.id), !!online2.account());
+      else r.top.forEach((e, i) => centre2(5 + i, `${String(i + 1).padStart(2)}. ${e.score}`));
+      centre2(18, `Enter: play again \xB7 Esc: menu${online2 ? " \xB7 Tab: You / World" : ""}`, "gray");
+    } else if (this.screen === "signin") {
+      drawSignIn(area, this.online.signIn());
+    } else if (this.screen === "account") {
+      drawAccount(area, this.online.account()?.login ?? "", this.confirmDelete, this.online.accountMessage());
     } else if (this.screen === "crashed") {
-      centre(8, this.crash, "brightRed");
-      centre(18, "Enter or Esc: menu", "gray");
+      centre2(8, this.crash, "brightRed");
+      centre2(18, "Enter or Esc: menu", "gray");
     }
   }
 };
@@ -794,7 +930,7 @@ function renderDiff(prev2, next) {
 // src/core/events.ts
 var import_node_fs2 = __toESM(require("node:fs"));
 var path2 = __toESM(require("node:path"));
-function trimEvents(file, keep = 100) {
+function trimEvents(file, keep2 = 100) {
   let text;
   try {
     text = import_node_fs2.default.readFileSync(file, "utf8");
@@ -802,8 +938,8 @@ function trimEvents(file, keep = 100) {
     return;
   }
   const lines = text.split("\n").filter((l) => l.length > 0);
-  if (lines.length <= keep) return;
-  import_node_fs2.default.writeFileSync(file, lines.slice(-keep).join("\n") + "\n");
+  if (lines.length <= keep2) return;
+  import_node_fs2.default.writeFileSync(file, lines.slice(-keep2).join("\n") + "\n");
 }
 function parseEvent(text) {
   try {
@@ -921,6 +1057,12 @@ function eventsFile(home) {
 function scoresFile(home) {
   return path3.join(dataDir(home), "scores.json");
 }
+function accountFile(home) {
+  return path3.join(dataDir(home), "online.json");
+}
+function outboxFile(home) {
+  return path3.join(dataDir(home), "outbox.jsonl");
+}
 function aliveFile(home) {
   return path3.join(dataDir(home), "arcade.alive");
 }
@@ -928,17 +1070,450 @@ function runsFile(home) {
   return path3.join(dataDir(home), "runs.json");
 }
 
-// src/core/alive.ts
-var fs3 = __toESM(require("node:fs"));
+// src/core/online/config.ts
+var SERVER_URL = "";
+var GITHUB_CLIENT_ID = "";
+function onlineConfig(env) {
+  const serverUrl = (env.TIME_WASTER_SERVER || SERVER_URL).replace(/\/+$/, "");
+  const clientId = env.TIME_WASTER_GITHUB_CLIENT_ID || GITHUB_CLIENT_ID;
+  return serverUrl && clientId ? { serverUrl, clientId } : null;
+}
+
+// src/core/online/api.ts
+var NETWORK = { ok: false, status: "network" };
+var LOGIN_RE = /^[A-Za-z0-9-]{1,39}$/;
+var GAME_RE = /^[a-z0-9-]{1,32}$/;
+var count = (v) => Number.isSafeInteger(v) && v >= 0;
+var isLogin = (v) => typeof v === "string" && LOGIN_RE.test(v);
+function boardRow(r) {
+  if (!count(r?.rank) || !count(r?.score) || !isLogin(r?.login)) return null;
+  return { rank: r.rank, login: r.login, score: r.score, at: typeof r.at === "string" ? r.at : "" };
+}
+function rankAndScore(me) {
+  return count(me?.rank) && count(me?.score) ? { rank: me.rank, score: me.score } : null;
+}
+function worldBests(boards) {
+  if (typeof boards !== "object" || boards === null || Array.isArray(boards)) return null;
+  const out = {};
+  for (const [game, b] of Object.entries(boards)) {
+    if (GAME_RE.test(game) && isLogin(b?.login) && count(b?.score)) out[game] = { login: b.login, score: b.score };
+  }
+  return out;
+}
+var Api = class {
+  constructor(serverUrl, fetchFn = fetch, timeoutMs = 5e3) {
+    this.fetchFn = fetchFn;
+    this.timeoutMs = timeoutMs;
+    this.base = serverUrl.replace(/\/+$/, "");
+  }
+  fetchFn;
+  timeoutMs;
+  base;
+  // Never rejects: network errors, timeouts and unexpected bodies all become a failed result.
+  async call(method, route, opts) {
+    try {
+      const headers = {};
+      if (opts.token) headers.Authorization = `Bearer ${opts.token}`;
+      if (opts.body !== void 0) headers["Content-Type"] = "application/json";
+      const res = await this.fetchFn(this.base + route, {
+        method,
+        headers,
+        body: opts.body === void 0 ? void 0 : JSON.stringify(opts.body),
+        signal: AbortSignal.timeout(this.timeoutMs)
+      });
+      if (!res.ok) return { ok: false, status: res.status };
+      const json = res.status === 204 ? null : await res.json();
+      const value = opts.map(json);
+      return value === null && res.status !== 204 ? NETWORK : { ok: true, value };
+    } catch {
+      return NETWORK;
+    }
+  }
+  login(githubToken) {
+    return this.call("POST", "/v1/login", {
+      body: { githubToken },
+      map: (j) => typeof j?.token === "string" && typeof j?.login === "string" ? { token: j.token, login: j.login } : null
+    });
+  }
+  submit(token, e) {
+    return this.call("POST", "/v1/scores", {
+      token,
+      body: { game: e.game, score: e.score, at: e.at },
+      map: (j) => typeof j?.best === "number" && typeof j?.rank === "number" ? { best: j.best, rank: j.rank } : null
+    });
+  }
+  board(game, token) {
+    return this.call("GET", `/v1/boards/${encodeURIComponent(game)}`, {
+      token,
+      map: (j) => Array.isArray(j?.top) ? { top: j.top.map(boardRow).filter((r) => r !== null), me: rankAndScore(j.me) } : null
+    });
+  }
+  /** World bests for `games` only (the server takes up to 50 ids). */
+  boards(games2) {
+    return this.call("GET", `/v1/boards?games=${games2.map(encodeURIComponent).join(",")}`, {
+      map: (j) => worldBests(j?.boards)
+    });
+  }
+  /** Ends this session on the server (sign-out). */
+  signOutSession(token) {
+    return this.call("DELETE", "/v1/session", { token, map: () => null });
+  }
+  deleteMe(token) {
+    return this.call("DELETE", "/v1/me", { token, map: () => null });
+  }
+};
+
+// src/core/online/github.ts
+var CODE_URL = "https://github.com/login/device/code";
+var TOKEN_URL = "https://github.com/login/oauth/access_token";
+var TIMEOUT_MS = 5e3;
+async function postForm(url, form, fetchFn) {
+  try {
+    const res = await fetchFn(url, {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams(form).toString(),
+      signal: AbortSignal.timeout(TIMEOUT_MS)
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+async function requestDeviceCode(clientId, fetchFn = fetch) {
+  const j = await postForm(CODE_URL, { client_id: clientId, scope: "" }, fetchFn);
+  if (typeof j?.device_code !== "string" || typeof j?.user_code !== "string" || typeof j?.verification_uri !== "string" || typeof j?.interval !== "number" || typeof j?.expires_in !== "number") {
+    return null;
+  }
+  return {
+    deviceCode: j.device_code,
+    userCode: j.user_code,
+    verificationUri: j.verification_uri,
+    intervalS: j.interval,
+    expiresInS: j.expires_in
+  };
+}
+async function pollDeviceToken(clientId, deviceCode, fetchFn = fetch) {
+  const j = await postForm(
+    TOKEN_URL,
+    { client_id: clientId, device_code: deviceCode, grant_type: "urn:ietf:params:oauth:grant-type:device_code" },
+    fetchFn
+  );
+  if (typeof j?.access_token === "string") return { status: "ok", token: j.access_token };
+  switch (j?.error) {
+    case "authorization_pending":
+      return { status: "pending" };
+    case "slow_down":
+      return { status: "slow_down" };
+    case "expired_token":
+      return { status: "expired" };
+    case "access_denied":
+      return { status: "denied" };
+    default:
+      return { status: "error" };
+  }
+}
+
+// src/core/online/store.ts
+var import_node_fs3 = __toESM(require("node:fs"));
 var path4 = __toESM(require("node:path"));
+var OUTBOX_MAX = 50;
+function isAccount(d) {
+  if (typeof d !== "object" || d === null) return false;
+  const a = d;
+  return typeof a.serverUrl === "string" && typeof a.token === "string" && typeof a.login === "string";
+}
+function isEntry(d) {
+  if (typeof d !== "object" || d === null) return false;
+  const e = d;
+  return typeof e.game === "string" && typeof e.score === "number" && Number.isFinite(e.score) && typeof e.at === "string";
+}
+function loadAccount(file) {
+  try {
+    const text = readText(file);
+    if (text === null) return null;
+    const d = JSON.parse(text);
+    return isAccount(d) ? { serverUrl: d.serverUrl, token: d.token, login: d.login } : null;
+  } catch {
+    return null;
+  }
+}
+function saveAccount(file, a) {
+  writeAtomic(file, a);
+}
+function clearAccount(file) {
+  withRetry(() => import_node_fs3.default.rmSync(file, { force: true }));
+}
+function appendOutbox(file, e) {
+  import_node_fs3.default.mkdirSync(path4.dirname(file), { recursive: true });
+  import_node_fs3.default.appendFileSync(file, JSON.stringify(e) + "\n");
+}
+function readOutbox(file) {
+  let text;
+  try {
+    text = readText(file);
+  } catch {
+    return [];
+  }
+  if (text === null) return [];
+  const out = [];
+  for (const line of text.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const d = JSON.parse(line);
+      if (isEntry(d)) out.push({ game: d.game, score: d.score, at: d.at });
+    } catch {
+    }
+  }
+  return out;
+}
+function writeOutbox(file, entries) {
+  const kept = entries.slice(-OUTBOX_MAX);
+  writeTextAtomic(file, kept.map((e) => JSON.stringify(e) + "\n").join(""));
+}
+
+// src/core/online/online.ts
+var REFRESH_MS = 6e4;
+var MAX_BOARD_GAMES = 50;
+var DELETING = "Deleting your online scores...";
+var DELETE_FAILED = "Couldn't reach the score server. Your scores were not deleted.";
+var DELETE_BLOCKED = "This account is blocked. Ask the admin to delete your scores.";
+var SLOW_DOWN_S = 5;
+function safely(op, fallback) {
+  try {
+    return op();
+  } catch {
+    return fallback;
+  }
+}
+function sameEntry(a, b) {
+  return !!a && a.game === b.game && a.score === b.score && a.at === b.at;
+}
+function background(call) {
+  try {
+    return call().catch(() => NETWORK_FAIL);
+  } catch {
+    return Promise.resolve(NETWORK_FAIL);
+  }
+}
+var NETWORK_FAIL = { ok: false, status: "network" };
+function loginFailure(status) {
+  if (status === 403) return "This GitHub account is blocked";
+  if (status === 429) return "Too many sign-ins, try again later";
+  return "Couldn't reach the score server";
+}
+function keep(status) {
+  return status === "network" || status === 429 || status >= 500;
+}
+var Online = class {
+  serverUrl;
+  clientId;
+  accountFile;
+  outboxFile;
+  api;
+  fetchFn;
+  sleep;
+  acct;
+  bests = {};
+  lastRefreshMs = null;
+  boardViews = /* @__PURE__ */ new Map();
+  boardSeq = /* @__PURE__ */ new Map();
+  signInState = { phase: "idle" };
+  signInGen = 0;
+  flushing = null;
+  flushAgain = false;
+  deleting = null;
+  acctMessage = null;
+  constructor(opts) {
+    this.serverUrl = opts.serverUrl;
+    this.clientId = opts.clientId;
+    this.accountFile = opts.accountFile;
+    this.outboxFile = opts.outboxFile;
+    this.fetchFn = opts.fetchFn;
+    this.api = opts.api ?? new Api(opts.serverUrl, opts.fetchFn);
+    this.sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+    const saved = safely(() => loadAccount(this.accountFile), null);
+    this.acct = saved && saved.serverUrl === this.serverUrl ? saved : null;
+    void this.flush();
+  }
+  account() {
+    return this.acct ? { login: this.acct.login } : null;
+  }
+  worldBest(game) {
+    const b = Object.hasOwn(this.bests, game) ? this.bests[game] : void 0;
+    return b && typeof b.login === "string" && typeof b.score === "number" ? { login: b.login, score: b.score } : null;
+  }
+  refreshWorldBest(nowMs, games2) {
+    if (!games2.length) return;
+    if (this.lastRefreshMs !== null && nowMs - this.lastRefreshMs < REFRESH_MS) return;
+    this.lastRefreshMs = nowMs;
+    background(() => this.api.boards(games2.slice(0, MAX_BOARD_GAMES))).then((r) => {
+      if (r.ok) this.bests = r.value;
+    });
+  }
+  loadBoard(game) {
+    const seq = (this.boardSeq.get(game) ?? 0) + 1;
+    this.boardSeq.set(game, seq);
+    this.boardViews.set(game, { status: "loading" });
+    this.api.board(game, this.acct?.token).then(
+      (r) => {
+        if (this.boardSeq.get(game) !== seq) return;
+        this.boardViews.set(game, r.ok ? { status: "ready", top: r.value.top, me: r.value.me } : { status: "offline" });
+      },
+      () => {
+        if (this.boardSeq.get(game) === seq) this.boardViews.set(game, { status: "offline" });
+      }
+    );
+  }
+  board(game) {
+    return this.boardViews.get(game) ?? { status: "loading" };
+  }
+  recordRun(game, score, at) {
+    if (!this.acct) return;
+    safely(() => appendOutbox(this.outboxFile, { game, score, at: at.toISOString() }), void 0);
+    if (this.flushing) this.flushAgain = true;
+    void this.flush();
+  }
+  flush() {
+    if (this.flushing) return this.flushing;
+    this.flushing = (async () => {
+      try {
+        do {
+          this.flushAgain = false;
+          await this.flushOnce();
+        } while (this.flushAgain);
+      } catch {
+      } finally {
+        this.flushing = null;
+      }
+    })();
+    return this.flushing;
+  }
+  async flushOnce() {
+    const acct = this.acct;
+    if (!acct) return;
+    for (; ; ) {
+      if (this.acct !== acct) return;
+      if (this.deleting) return;
+      const head = safely(() => readOutbox(this.outboxFile), [])[0];
+      if (!head) return;
+      const r = await this.api.submit(acct.token, head);
+      if (this.acct !== acct) return;
+      if (!r.ok && r.status === 401) {
+        this.clearLocal();
+        return;
+      }
+      if (!r.ok && keep(r.status)) return;
+      const now = readOutbox(this.outboxFile);
+      if (sameEntry(now[0], head)) writeOutbox(this.outboxFile, now.slice(1));
+    }
+  }
+  signIn() {
+    return this.signInState;
+  }
+  startSignIn() {
+    if (this.signInState.phase === "starting" || this.signInState.phase === "code") return;
+    const gen = ++this.signInGen;
+    this.signInState = { phase: "starting" };
+    this.runSignIn(gen).catch(() => {
+      if (gen === this.signInGen) this.signInState = { phase: "failed", message: "Couldn't reach GitHub" };
+    });
+  }
+  async runSignIn(gen) {
+    const live = () => gen === this.signInGen;
+    const failed = (message) => {
+      if (live()) this.signInState = { phase: "failed", message };
+    };
+    const code = await requestDeviceCode(this.clientId, this.fetchFn);
+    if (!live()) return;
+    if (!code) return failed("Couldn't reach GitHub");
+    this.signInState = { phase: "code", userCode: code.userCode, verificationUri: code.verificationUri };
+    let intervalS = code.intervalS;
+    let elapsedS = 0;
+    for (; ; ) {
+      await this.sleep(intervalS * 1e3);
+      if (!live()) return;
+      elapsedS += intervalS;
+      const poll = await pollDeviceToken(this.clientId, code.deviceCode, this.fetchFn);
+      if (!live()) return;
+      if (poll.status === "ok") {
+        const r = await this.api.login(poll.token);
+        if (!live()) return;
+        if (!r.ok) return failed(loginFailure(r.status));
+        const acct = { serverUrl: this.serverUrl, token: r.value.token, login: r.value.login };
+        safely(() => saveAccount(this.accountFile, acct), void 0);
+        this.acct = acct;
+        this.signInState = { phase: "done", login: acct.login };
+        void this.flush();
+        return;
+      }
+      if (poll.status === "expired") return failed("Code expired");
+      if (poll.status === "denied") return failed("Sign-in denied");
+      if (poll.status === "error") return failed("Couldn't reach GitHub");
+      if (poll.status === "slow_down") intervalS += SLOW_DOWN_S;
+      if (elapsedS >= code.expiresInS) return failed("Code expired");
+    }
+  }
+  cancelSignIn() {
+    this.signInGen++;
+    this.signInState = { phase: "idle" };
+  }
+  signOut(deleteScores) {
+    const acct = this.acct;
+    if (!acct) return;
+    if (!deleteScores) {
+      this.acct = null;
+      this.deleting = null;
+      this.acctMessage = null;
+      void background(() => this.api.signOutSession(acct.token));
+      this.clearFiles(acct);
+      return;
+    }
+    if (this.deleting) return;
+    this.deleting = acct;
+    this.acctMessage = null;
+    background(() => this.api.deleteMe(acct.token)).then((r) => {
+      if (this.deleting !== acct) return;
+      this.deleting = null;
+      if (r.ok || r.status === 401) {
+        if (this.acct === acct) this.clearLocal();
+        return;
+      }
+      this.acctMessage = r.status === 403 ? DELETE_BLOCKED : DELETE_FAILED;
+      void this.flush();
+    });
+  }
+  accountMessage() {
+    return this.deleting ? DELETING : this.acctMessage;
+  }
+  clearAccountMessage() {
+    this.acctMessage = null;
+  }
+  clearLocal() {
+    const acct = this.acct;
+    this.acct = null;
+    if (acct) this.clearFiles(acct);
+  }
+  /** Removes the saved session and unsent runs, unless a newer sign-in has replaced that session. */
+  clearFiles(acct) {
+    if (this.acct && this.acct !== acct) return;
+    safely(() => clearAccount(this.accountFile), void 0);
+    safely(() => writeOutbox(this.outboxFile, []), void 0);
+  }
+};
+
+// src/core/alive.ts
+var fs4 = __toESM(require("node:fs"));
+var path5 = __toESM(require("node:path"));
 var BEAT_MS = 2e3;
 function touchAlive(file) {
-  fs3.mkdirSync(path4.dirname(file), { recursive: true });
-  fs3.writeFileSync(file, String(process.pid));
+  fs4.mkdirSync(path5.dirname(file), { recursive: true });
+  fs4.writeFileSync(file, String(process.pid));
 }
 function clearAlive(file) {
   try {
-    fs3.unlinkSync(file);
+    fs4.unlinkSync(file);
   } catch {
   }
 }
@@ -1144,77 +1719,6 @@ var blockDrop = {
 };
 var block_drop_default = blockDrop;
 
-// src/games/drift/arena.ts
-var START = { x: 6, y: 10 };
-var SAFE_ZONE = { x: 1, y: 7, w: 20, h: 7 };
-var MIN_COIN_DIST = 10;
-var ATTEMPTS_PER_PILLAR = 500;
-var MAX_RESTARTS = 20;
-var FALLBACK_PILLARS = [
-  { x: 24, y: 3, w: 3, h: 2 },
-  { x: 34, y: 3, w: 3, h: 2 },
-  { x: 44, y: 3, w: 3, h: 2 },
-  { x: 30, y: 14, w: 3, h: 2 },
-  { x: 44, y: 14, w: 3, h: 2 }
-];
-function isWall(p) {
-  return p.x <= 0 || p.y <= 0 || p.x >= GAME_WIDTH - 1 || p.y >= GAME_HEIGHT - 1;
-}
-function inRect(p, r) {
-  return p.x >= r.x && p.x < r.x + r.w && p.y >= r.y && p.y < r.y + r.h;
-}
-function isBlocked(p, pillars) {
-  return isWall(p) || pillars.some((r) => inRect(p, r));
-}
-var intersects = (a, b) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
-var grown = (r, n) => ({ x: r.x - n, y: r.y - n, w: r.w + 2 * n, h: r.h + 2 * n });
-var randInt = (ctx, min, max) => min + Math.floor(ctx.random() * (max - min + 1));
-function tryPlace(count, ctx) {
-  const pillars = [];
-  while (pillars.length < count) {
-    let placed = false;
-    for (let a = 0; a < ATTEMPTS_PER_PILLAR && !placed; a++) {
-      const w = randInt(ctx, 2, 4);
-      const h = randInt(ctx, 1, 2);
-      const x = randInt(ctx, 3, 56 - w + 1);
-      const y = randInt(ctx, 3, 16 - h + 1);
-      const cand = { x, y, w, h };
-      if (intersects(cand, SAFE_ZONE)) continue;
-      if (pillars.some((q) => intersects(grown(cand, 2), q))) continue;
-      pillars.push(cand);
-      placed = true;
-    }
-    if (!placed) return null;
-  }
-  return pillars;
-}
-function generatePillars(ctx) {
-  const count = 5 + Math.floor(ctx.random() * 3);
-  for (let r = 0; r < MAX_RESTARTS; r++) {
-    const result = tryPlace(count, ctx);
-    if (result) return result;
-  }
-  return FALLBACK_PILLARS.map((p) => ({ ...p }));
-}
-function spawnCoin(car, pillars, ctx) {
-  const candidates = [];
-  for (let y = 1; y < GAME_HEIGHT - 1; y++) {
-    for (let x = 1; x < GAME_WIDTH - 1; x++) {
-      let clear = true;
-      for (let dy = -1; dy <= 1 && clear; dy++)
-        for (let dx = -1; dx <= 1; dx++)
-          if (isBlocked({ x: x + dx, y: y + dy }, pillars)) {
-            clear = false;
-            break;
-          }
-      if (clear) candidates.push({ x, y });
-    }
-  }
-  const far = candidates.filter((c) => Math.hypot(c.x - car.x, 2 * (c.y - car.y)) >= MIN_COIN_DIST);
-  const pool = far.length > 0 ? far : candidates;
-  return pool[Math.floor(ctx.random() * pool.length)];
-}
-
 // src/games/drift/physics.ts
 var TICK_MS = 50;
 var START_SPEED = 8;
@@ -1252,8 +1756,221 @@ function isDrifting(travel, heading) {
   return Math.abs(angleDiff(travel, headingAngle(heading))) > DRIFT_THRESHOLD;
 }
 
+// src/games/drift/arena.ts
+var START = { x: 6, y: 10 };
+var SAFE_ZONE = { x: 1, y: 7, w: 20, h: 7 };
+var MIN_COIN_DIST = 10;
+var ATTEMPTS_PER_PILLAR = 500;
+var MAX_RESTARTS = 20;
+var FALLBACK_PILLARS = [
+  { x: 24, y: 3, w: 3, h: 2 },
+  { x: 34, y: 3, w: 3, h: 2 },
+  { x: 44, y: 3, w: 3, h: 2 },
+  { x: 30, y: 14, w: 3, h: 2 },
+  { x: 44, y: 14, w: 3, h: 2 }
+];
+function isWall(p) {
+  return p.x <= 0 || p.y <= 0 || p.x >= GAME_WIDTH - 1 || p.y >= GAME_HEIGHT - 1;
+}
+function inRect(p, r) {
+  return p.x >= r.x && p.x < r.x + r.w && p.y >= r.y && p.y < r.y + r.h;
+}
+function isBlocked(p, pillars) {
+  return isWall(p) || pillars.some((r) => inRect(p, r));
+}
+var intersects = (a, b) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+var grown = (r, n) => ({ x: r.x - n, y: r.y - n, w: r.w + 2 * n, h: r.h + 2 * n });
+var randInt = (ctx, min, max) => min + Math.floor(ctx.random() * (max - min + 1));
+var PILLAR_SIZE = { w: [2, 4], h: [1, 2] };
+function placeRect(existing, avoid, size, ctx, attempts = ATTEMPTS_PER_PILLAR) {
+  for (let a = 0; a < attempts; a++) {
+    const w = randInt(ctx, size.w[0], size.w[1]);
+    const h = randInt(ctx, size.h[0], size.h[1]);
+    const cand = { x: randInt(ctx, 3, 57 - w), y: randInt(ctx, 3, 17 - h), w, h };
+    if (avoid.some((r) => intersects(cand, r))) continue;
+    if (existing.some((q) => intersects(grown(cand, 2), q))) continue;
+    return cand;
+  }
+  return null;
+}
+function carZone(x, y, travel) {
+  const zone = [{ x: Math.round(x) - 2, y: Math.round(y) - 2, w: 5, h: 5 }];
+  for (let i = 1; i <= 8; i++) {
+    zone.push({
+      x: Math.round(x + i * Math.cos(travel)),
+      y: Math.round(y + i * 0.5 * Math.sin(travel)),
+      w: 1,
+      h: 1
+    });
+  }
+  return zone;
+}
+function tryPlace(count2, ctx) {
+  const pillars = [];
+  while (pillars.length < count2) {
+    const r = placeRect(pillars, [SAFE_ZONE], PILLAR_SIZE, ctx);
+    if (!r) return null;
+    pillars.push(r);
+  }
+  return pillars;
+}
+function generatePillars(ctx) {
+  const count2 = 5 + Math.floor(ctx.random() * 3);
+  for (let r = 0; r < MAX_RESTARTS; r++) {
+    const result = tryPlace(count2, ctx);
+    if (result) return result;
+  }
+  return FALLBACK_PILLARS.map((p) => ({ ...p }));
+}
+var pointRect = (p) => ({ x: p.x, y: p.y, w: 1, h: 1 });
+function clearanceFor(speed) {
+  const t = (speed - START_SPEED) / (MAX_SPEED - START_SPEED);
+  const cx = Math.min(4, Math.max(1, Math.round(1 + 3 * t)));
+  return { cx, cy: Math.ceil(cx / 2) };
+}
+function clearBox(p, speed) {
+  const { cx, cy } = clearanceFor(speed);
+  return { x: p.x - cx, y: p.y - cy, w: 2 * cx + 1, h: 2 * cy + 1 };
+}
+function hasClearance(p, cx, cy, pillars) {
+  for (let dy = -cy; dy <= cy; dy++)
+    for (let dx = -cx; dx <= cx; dx++)
+      if (isBlocked({ x: p.x + dx, y: p.y + dy }, pillars)) return false;
+  return true;
+}
+function spawnCoin(car, pillars, ctx, opts = {}) {
+  const avoid = opts.avoid ?? [];
+  const free = [];
+  for (let y = 1; y < GAME_HEIGHT - 1; y++)
+    for (let x = 1; x < GAME_WIDTH - 1; x++) {
+      const p = { x, y };
+      if (!isBlocked(p, pillars) && !avoid.some((r) => inRect(p, r))) free.push(p);
+    }
+  let candidates = [];
+  for (let cx = clearanceFor(opts.speed ?? START_SPEED).cx; cx >= 1 && candidates.length === 0; cx--) {
+    const cy = Math.ceil(cx / 2);
+    candidates = free.filter((p) => hasClearance(p, cx, cy, pillars));
+  }
+  if (candidates.length === 0) candidates = free;
+  const far = candidates.filter((c) => Math.hypot(c.x - car.x, 2 * (c.y - car.y)) >= MIN_COIN_DIST);
+  const pool = far.length > 0 ? far : candidates;
+  return pool[Math.floor(ctx.random() * pool.length)];
+}
+
+// src/games/drift/effects.ts
+var DURATION = { double: 200, grip: 120, rain: 120, nitro: 100, shield: 200, slick: 60 };
+var NITRO_SPEED = 1.5;
+var NITRO_VALUE = 3;
+var DOUBLE_VALUE = 2;
+var LOW_GRIP = 0.05;
+var CANCELS = { grip: "slick", slick: "grip" };
+function addEffect(effects, kind) {
+  const cancelled = CANCELS[kind];
+  const rest = effects.filter((e) => e.kind !== kind && e.kind !== cancelled);
+  return [...rest, { kind, ticksLeft: DURATION[kind] }];
+}
+function removeEffect(effects, kind) {
+  return effects.filter((e) => e.kind !== kind);
+}
+function hasEffect(effects, kind) {
+  return effects.some((e) => e.kind === kind);
+}
+function tickEffects(effects) {
+  return effects.map((e) => ({ kind: e.kind, ticksLeft: e.ticksLeft - 1 })).filter((e) => e.ticksLeft > 0);
+}
+function modifiers(effects) {
+  let speedMul = 1;
+  let coinMul = 1;
+  if (hasEffect(effects, "nitro")) {
+    speedMul *= NITRO_SPEED;
+    coinMul *= NITRO_VALUE;
+  }
+  if (hasEffect(effects, "double")) coinMul *= DOUBLE_VALUE;
+  return { speedMul, coinMul };
+}
+function gripNow(speed, effects, onOil) {
+  if (hasEffect(effects, "grip")) return GRIP_SLOW;
+  if (hasEffect(effects, "slick") || onOil) return LOW_GRIP;
+  return gripFor(speed);
+}
+
+// src/games/drift/obstacles.ts
+var OBSTACLE_EVERY = 5;
+var WARN_TICKS = 40;
+var MAX_PILLARS = 12;
+var MAX_OIL = 3;
+var OIL_FROM = 10;
+var SHUFFLE_TICKS = 30;
+var OIL_SIZE = { w: [3, 5], h: [1, 2] };
+function newObstacle(args, ctx) {
+  const { pillars, oil, pending, avoid, coins, gapTo = [] } = args;
+  const pillarCount = Math.max(pillars.length, gapTo.length) + pending.filter((p) => p.kind === "pillar").length;
+  const oilCount = oil.length + pending.filter((p) => p.kind === "oil").length;
+  const pillarOk = pillarCount < MAX_PILLARS;
+  const oilOk = coins >= OIL_FROM && oilCount < MAX_OIL;
+  if (!pillarOk && !oilOk) return null;
+  const kind = oilOk && (!pillarOk || ctx.random() < 1 / 3) ? "oil" : "pillar";
+  const existing = [...pillars, ...oil, ...pending.map((p) => p.rect), ...gapTo];
+  const rect = placeRect(existing, avoid, kind === "oil" ? OIL_SIZE : PILLAR_SIZE, ctx);
+  return rect ? { kind, rect, ticksLeft: WARN_TICKS } : null;
+}
+var SHUFFLE_RESTARTS = 20;
+function shuffleLayout(old, avoid, ctx) {
+  let best = [];
+  for (let r = 0; r < SHUFFLE_RESTARTS && best.length < old.length; r++) {
+    const placed = [];
+    while (placed.length < old.length) {
+      const rect = placeRect(placed, avoid, PILLAR_SIZE, ctx);
+      if (!rect) break;
+      placed.push(rect);
+    }
+    if (placed.length > best.length) best = placed;
+  }
+  const out = [...best];
+  for (const o of old) {
+    if (out.length >= old.length) break;
+    if (avoid.some((a) => intersects(o, a))) continue;
+    if (out.some((q) => intersects(grown(o, 2), q))) continue;
+    out.push(o);
+  }
+  return out;
+}
+
+// src/games/drift/powerups.ts
+var POWER_LIFE = 160;
+var POWER_BLINK = 40;
+var POWER_LOOK = {
+  double: { ch: "2", color: "brightYellow" },
+  grip: { ch: "G", color: "brightGreen" },
+  rain: { ch: "$", color: "yellow" },
+  nitro: { ch: "N", color: "brightRed" },
+  shield: { ch: "S", color: "brightCyan" },
+  shuffle: { ch: "X", color: "brightMagenta" },
+  mystery: { ch: "?", color: "brightWhite" }
+};
+var POWER_WEIGHTS = { double: 3, grip: 3, rain: 3, shield: 3, shuffle: 2, nitro: 2, mystery: 2 };
+function pickPower(ctx) {
+  const kinds = Object.keys(POWER_WEIGHTS);
+  let roll = ctx.random() * kinds.reduce((sum, k) => sum + POWER_WEIGHTS[k], 0);
+  for (const k of kinds) {
+    roll -= POWER_WEIGHTS[k];
+    if (roll < 0) return k;
+  }
+  return kinds[kinds.length - 1];
+}
+var MYSTERY_OUTCOMES = ["double", "grip", "rain", "nitro", "shield", "shuffle", "slick"];
+function resolveMystery(ctx) {
+  return MYSTERY_OUTCOMES[Math.floor(ctx.random() * MYSTERY_OUTCOMES.length)];
+}
+var FIRST_POWER_AT = 2;
+function nextPowerGap(ctx) {
+  return 3 + Math.floor(ctx.random() * 2);
+}
+
 // src/games/drift/index.ts
 var TRAIL_LEN = 6;
+var BASE_COIN = 10;
+var RAIN_COUNT = 5;
 var CAR = ["\u2192", "\u2198", "\u2193", "\u2199", "\u2190", "\u2196", "\u2191", "\u2197"];
 function cellOf(s) {
   return { x: Math.round(s.x), y: Math.round(s.y) };
@@ -1269,9 +1986,19 @@ function init2(ctx) {
     lastTurn: 1,
     coins: 0,
     coin: spawnCoin(START, pillars, ctx),
+    extraCoins: [],
     pillars,
+    oil: [],
+    shuffle: null,
+    pending: [],
     trail: [],
-    crashed: false
+    crashed: false,
+    points: 0,
+    scheduleCoins: 0,
+    nextPowerAt: FIRST_POWER_AT,
+    powerUp: null,
+    effects: [],
+    tick: 0
   };
 }
 function onKey2(state, key) {
@@ -1280,30 +2007,169 @@ function onKey2(state, key) {
   if (key === "left") return { ...state, heading: rotateHeading(state.heading, -1), lastTurn: -1 };
   return state;
 }
+function applyPower(state, kind, ctx) {
+  if (kind === "mystery") {
+    const outcome = resolveMystery(ctx);
+    return outcome === "slick" ? { ...state, effects: addEffect(state.effects, "slick") } : applyPower(state, outcome, ctx);
+  }
+  if (kind === "shuffle") {
+    const avoid = [
+      ...carZone(state.x, state.y, state.travel),
+      ...spawnAvoid({ ...state, shuffle: null }),
+      ...state.oil,
+      ...[...state.oil, ...state.pending.map((p) => p.rect)].map((r) => grown(r, 2)),
+      ...pickupBoxes(state)
+    ];
+    return { ...state, shuffle: { pillars: shuffleLayout(state.pillars, avoid, ctx), ticksLeft: SHUFFLE_TICKS } };
+  }
+  if (kind === "rain" && !hasEffect(state.effects, "rain")) {
+    const speed = speedNow(state);
+    const extras = [];
+    for (let i = 0; i < RAIN_COUNT; i++) {
+      const avoid = [...spawnAvoid(state), ...extras.map(pointRect)];
+      extras.push(spawnCoin(cellOf(state), clearFrom(state), ctx, { speed, avoid }));
+    }
+    return { ...state, extraCoins: extras, effects: addEffect(state.effects, kind) };
+  }
+  return { ...state, effects: addEffect(state.effects, kind) };
+}
+function spawnAvoid(state) {
+  const rects = [pointRect(state.coin), ...state.extraCoins.map(pointRect)];
+  if (state.powerUp) rects.push(pointRect(state.powerUp.at));
+  rects.push(...state.oil, ...state.pending.map((p) => p.rect));
+  if (state.shuffle) rects.push(...state.shuffle.pillars);
+  return rects;
+}
+function dropOne(layout, destroyed) {
+  const i = layout.findIndex((r) => r.x === destroyed.x && r.y === destroyed.y && r.w === destroyed.w && r.h === destroyed.h);
+  return layout.filter((_, j) => j !== Math.max(i, 0));
+}
+var speedNow = (s) => speedForCoins(s.coins) * modifiers(s.effects).speedMul;
+function clearFrom(s) {
+  return [...s.pillars, ...s.pending.filter((p) => p.kind === "pillar").map((p) => p.rect), ...s.shuffle?.pillars ?? []];
+}
+function pickupBoxes(s) {
+  const speed = speedNow(s);
+  const points = [s.coin, ...s.extraCoins, ...s.powerUp ? [s.powerUp.at] : []];
+  return points.map((p) => clearBox(p, speed));
+}
 function update2(state, ctx) {
   if (state.crashed) return state;
-  const speed = speedForCoins(state.coins);
-  const travel = turnToward(state.travel, headingAngle(state.heading), gripFor(speed), state.lastTurn);
+  const effects = tickEffects(state.effects);
+  let st = {
+    ...state,
+    effects,
+    extraCoins: hasEffect(effects, "rain") ? state.extraCoins : []
+  };
+  const speed = speedForCoins(st.coins) * modifiers(st.effects).speedMul;
+  const travel = turnToward(st.travel, headingAngle(st.heading), gripNow(speed, st.effects, st.oil.some((r) => inRect(cellOf(st), r))), st.lastTurn);
   const dx = Math.cos(travel) * speed * TICK_MS / 1e3;
   const dy = Math.sin(travel) * speed * TICK_MS / 1e3 * 0.5;
   const n = Math.max(1, Math.ceil(Math.max(Math.abs(dx), Math.abs(dy))));
-  let { x, y, coins, coin, trail } = state;
+  let { x, y } = st;
   let crashed = false;
   for (let i = 0; i < n; i++) {
     x += dx / n;
     y += dy / n;
     const cell2 = cellOf({ x, y });
-    if (isBlocked(cell2, state.pillars)) {
+    if (isWall(cell2)) {
       crashed = true;
       break;
     }
-    if (samePoint(cell2, coin)) {
-      coins += 1;
-      coin = spawnCoin(cell2, state.pillars, ctx);
+    const hit = st.pillars.find((r) => inRect(cell2, r));
+    if (hit) {
+      if (!hasEffect(st.effects, "shield")) {
+        crashed = true;
+        break;
+      }
+      st = {
+        ...st,
+        pillars: st.pillars.filter((r) => r !== hit),
+        effects: removeEffect(st.effects, "shield"),
+        shuffle: st.shuffle && { ...st.shuffle, pillars: dropOne(st.shuffle.pillars, hit) }
+      };
     }
-    if (trail.length === 0 || !samePoint(trail[0], cell2)) trail = [cell2, ...trail].slice(0, TRAIL_LEN);
+    const extra = st.extraCoins.findIndex((p) => samePoint(p, cell2));
+    if (extra >= 0) {
+      st = {
+        ...st,
+        coins: st.coins + 1,
+        points: st.points + BASE_COIN * modifiers(st.effects).coinMul,
+        extraCoins: st.extraCoins.filter((_, j) => j !== extra)
+      };
+    }
+    if (samePoint(cell2, st.coin)) {
+      const { speedMul, coinMul } = modifiers(st.effects);
+      const coins = st.coins + 1;
+      st = { ...st, coins, scheduleCoins: st.scheduleCoins + 1, points: st.points + BASE_COIN * coinMul };
+      st = { ...st, coin: spawnCoin(cell2, clearFrom(st), ctx, { speed: speedForCoins(coins) * speedMul, avoid: spawnAvoid(st) }) };
+      if (st.scheduleCoins % OBSTACLE_EVERY === 0) {
+        const avoid = [...carZone(x, y, travel), ...spawnAvoid(st), ...pickupBoxes(st)];
+        const ob = newObstacle({ pillars: st.pillars, oil: st.oil, pending: st.pending, avoid, coins: st.coins, gapTo: st.shuffle?.pillars }, ctx);
+        if (ob) st = { ...st, pending: [...st.pending, ob] };
+      }
+    }
+    if (st.powerUp && samePoint(cell2, st.powerUp.at)) {
+      st = applyPower({ ...st, x, y, travel }, st.powerUp.kind, ctx);
+      st = { ...st, powerUp: null, nextPowerAt: st.scheduleCoins + nextPowerGap(ctx) };
+    }
+    if (st.trail.length === 0 || !samePoint(st.trail[0], cell2)) {
+      st = { ...st, trail: [cell2, ...st.trail].slice(0, TRAIL_LEN) };
+    }
   }
-  return { ...state, x, y, travel, coins, coin, trail, crashed };
+  st = { ...st, x, y, travel, crashed };
+  if (st.powerUp) {
+    const ticksLeft = st.powerUp.ticksLeft - 1;
+    st = ticksLeft > 0 ? { ...st, powerUp: { ...st.powerUp, ticksLeft } } : { ...st, powerUp: null, nextPowerAt: st.scheduleCoins + nextPowerGap(ctx) };
+  }
+  if (st.powerUp === null && st.nextPowerAt !== null && st.scheduleCoins >= st.nextPowerAt) {
+    const at = spawnCoin(cellOf(st), clearFrom(st), ctx, { speed: speedNow(st), avoid: spawnAvoid(st) });
+    st = { ...st, powerUp: { kind: pickPower(ctx), at, ticksLeft: POWER_LIFE }, nextPowerAt: null };
+  }
+  return { ...resolveShuffle(resolvePending(st)), tick: st.tick + 1 };
+}
+function resolveShuffle(st) {
+  if (!st.shuffle) return st;
+  const ticksLeft = st.shuffle.ticksLeft - 1;
+  if (ticksLeft > 0) return { ...st, shuffle: { ...st.shuffle, ticksLeft } };
+  const blocked = [...carZone(st.x, st.y, st.travel), ...pickupBoxes(st)];
+  return { ...st, pillars: st.shuffle.pillars.filter((p) => !blocked.some((b) => intersects(p, b))), shuffle: null };
+}
+function resolvePending(st) {
+  if (st.pending.length === 0) return st;
+  const zone = carZone(st.x, st.y, st.travel);
+  const pending = [];
+  const pillars = [...st.pillars];
+  const oil = [...st.oil];
+  const solidified = [];
+  for (const p of st.pending) {
+    const ticksLeft = Math.max(0, p.ticksLeft - 1);
+    if (ticksLeft > 0 || zone.some((z) => intersects(z, p.rect))) pending.push({ ...p, ticksLeft });
+    else if (p.kind === "pillar") {
+      pillars.push(p.rect);
+      solidified.push(p.rect);
+    } else oil.push(p.rect);
+  }
+  const shuffle = st.shuffle && solidified.length > 0 ? { ...st.shuffle, pillars: [...st.shuffle.pillars, ...solidified] } : st.shuffle;
+  return { ...st, pending, pillars, oil, shuffle };
+}
+var READOUT_MAX_X = 57;
+var LABEL = { double: "\xD72", grip: "G", rain: "$", nitro: "N", shield: "S", slick: "SLICK" };
+function drawReadout(effects, screen) {
+  let x = 2;
+  for (const e of effects) {
+    const color = e.kind === "slick" ? "brightRed" : POWER_LOOK[e.kind].color;
+    const filled = Math.ceil(4 * e.ticksLeft / DURATION[e.kind]);
+    const text = `${LABEL[e.kind]} ${"\u2588".repeat(filled)}${"\u2591".repeat(4 - filled)} `;
+    for (const ch of text) {
+      if (x > READOUT_MAX_X) return;
+      screen.put(x++, 0, ch, color);
+    }
+  }
+}
+function fillRect(screen, r, ch, color) {
+  for (let y = r.y; y < r.y + r.h; y++)
+    for (let x = r.x; x < r.x + r.w; x++) screen.put(x, y, ch, color);
 }
 function draw2(state, screen) {
   const W2 = GAME_WIDTH - 1, H2 = GAME_HEIGHT - 1;
@@ -1323,11 +2189,26 @@ function draw2(state, screen) {
     for (let y = r.y; y < r.y + r.h; y++)
       for (let x = r.x; x < r.x + r.w; x++) screen.put(x, y, "\u2588", "blue");
   }
+  for (const r of state.oil) fillRect(screen, r, "\u2248", "blue");
+  if (Math.floor(state.tick / 4) % 2 === 0) {
+    for (const r of state.shuffle?.pillars ?? []) {
+      for (let y = r.y; y < r.y + r.h; y++)
+        for (let x = r.x; x < r.x + r.w; x++)
+          if (!state.pillars.some((p2) => inRect({ x, y }, p2))) screen.put(x, y, "\u2591", "magenta");
+    }
+    for (const p2 of state.pending) fillRect(screen, p2.rect, p2.kind === "pillar" ? "\u2591" : "\u2248", "gray");
+  }
   const car = cellOf(state);
   if (isDrifting(state.travel, state.heading)) {
     for (const t of state.trail) if (!samePoint(t, car)) screen.put(t.x, t.y, "\xB7", "gray");
   }
   screen.put(state.coin.x, state.coin.y, "\u25CF", "yellow");
+  for (const e of state.extraCoins) screen.put(e.x, e.y, "\u25CF", "yellow");
+  const p = state.powerUp;
+  if (p && (p.ticksLeft > POWER_BLINK || Math.floor(state.tick / 4) % 2 === 0)) {
+    screen.put(p.at.x, p.at.y, POWER_LOOK[p.kind].ch, POWER_LOOK[p.kind].color);
+  }
+  drawReadout(state.effects, screen);
   screen.put(car.x, car.y, CAR[state.heading], state.crashed ? "red" : "brightCyan");
 }
 var drift = {
@@ -1340,7 +2221,7 @@ var drift = {
   onKey: onKey2,
   update: update2,
   draw: draw2,
-  score: (s) => s.coins * 10,
+  score: (s) => s.points,
   isOver: (s) => s.crashed
 };
 var drift_default = drift;
@@ -1727,15 +2608,15 @@ function advance(s, shell) {
   return { shell: sh, hit: null };
 }
 function aimPath(s) {
-  const path5 = [];
+  const path6 = [];
   let sh = launch(s, "player", s.player.angle, s.player.power);
   for (let i = 0; i < PREVIEW_TICKS; i++) {
     const r = advance(s, sh);
     if (r.hit) break;
     sh = r.shell;
-    path5.push({ x: sh.x, y: sh.y });
+    path6.push({ x: sh.x, y: sh.y });
   }
-  return path5;
+  return path6;
 }
 function trace(s, who, angle, power) {
   let sh = launch(s, who, angle, power);
@@ -2005,6 +2886,8 @@ var worm = {
   tickMs: 60,
   // normal speed moves every other tick (120 ms), turbo every tick
   controls: "\u2190\u2191\u2192\u2193 Spc turbo",
+  maxScore: 5220,
+  // 29 x 18 cells x 10 points per dot (an upper bound; the worm starts on some cells)
   length: { kind: "open", minutes: 3 },
   init: init6,
   onKey: onKey6,
@@ -2027,7 +2910,9 @@ try {
   trimEvents(eventsFile());
 } catch {
 }
-var app = new App({ games, scoresFile: scoresFile(), runsFile: runsFile(), nowMs: Date.now(), startGameId: process.argv[2] });
+var cfg = onlineConfig(process.env);
+var online = cfg ? new Online({ ...cfg, accountFile: accountFile(), outboxFile: outboxFile() }) : void 0;
+var app = new App({ games, scoresFile: scoresFile(), runsFile: runsFile(), nowMs: Date.now(), startGameId: process.argv[2], online });
 var watcher = new EventWatcher(eventsFile(), (ev) => app.onEvent(ev, Date.now()));
 watcher.start();
 try {
@@ -2083,7 +2968,12 @@ process.stdout.on("resize", () => {
 timer = setInterval(() => {
   const now = Date.now();
   app.tick(now);
-  const buf = app.render(process.stdout.columns || 80, process.stdout.rows || 24, now);
+  let buf;
+  try {
+    buf = app.render(process.stdout.columns || 80, process.stdout.rows || 24, now);
+  } catch {
+    return;
+  }
   const out = renderDiff(prev, buf);
   if (out) process.stdout.write(out);
   prev = buf;
