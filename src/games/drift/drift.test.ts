@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createRandom } from '../../core/random';
 import type { GameContext } from '../../core/types';
-import { clearanceFor, grown, inRect, intersects, isBlocked, spawnCoin, type Point, type Rect } from './arena';
+import { clearanceFor, grown, inRect, intersects, isBlocked, spawnCoin, START as START_CELL, type Point, type Rect } from './arena';
 import { MAX_OIL, MAX_PILLARS, SHUFFLE_TICKS, WARN_TICKS } from './obstacles';
 import { angleDiff, COINS_TO_MAX, GRIP_SLOW, headingAngle, speedForCoins, START_SPEED, TICK_MS } from './physics';
 import { hasEffect } from './effects';
@@ -548,5 +548,65 @@ describe('drift growing arena', () => {
       expect(s.crashed).toBe(false);
       expect(s.shuffle).toBeNull();
     });
+  });
+});
+
+describe('drift coin clearance survives new obstacles', () => {
+  const TOP = 20; // coins at which speed is MAX
+  const box = (p: Point, speed: number): Rect => {
+    const { cx, cy } = clearanceFor(speed);
+    return { x: p.x - cx, y: p.y - cy, w: 2 * cx + 1, h: 2 * cy + 1 };
+  };
+  const pickups = (s: DriftState): Point[] => [s.coin, ...s.extraCoins, ...(s.powerUp ? [s.powerUp.at] : [])];
+  const expectClear = (s: DriftState, label: string) => {
+    const speed = speedForCoins(s.coins);
+    for (const p of pickups(s)) {
+      const near = s.pillars.filter((r) => intersects(box(p, speed), r));
+      expect(near, `${label}: pickup ${p.x},${p.y}`).toEqual([]);
+    }
+  };
+  const hold = (s: DriftState): DriftState => ({ ...s, x: 6, y: 10, travel: 0, heading: 0 });
+
+  it('after a Shuffle swap every live pickup keeps clearance from all pillars', () => {
+    for (let seed = 1; seed <= 150; seed++) {
+      const c = ctx(seed);
+      const base = drift.init(c);
+      const pillars = base.pillars;
+      const speed = speedForCoins(TOP);
+      const coin = spawnCoin(START_CELL, pillars, c, { speed });
+      let s: DriftState = { ...base, coins: TOP, coin, nextPowerAt: null };
+      s = applyPower(s, 'rain', c);
+      s = { ...s, powerUp: { kind: 'double', at: spawnCoin(START_CELL, pillars, c, { speed, avoid: spawnAvoid(s) }), ticksLeft: POWER_LIFE } };
+      s = applyPower(s, 'shuffle', c);
+      for (let i = 0; i < SHUFFLE_TICKS && s.shuffle; i++) s = drift.update(hold(s), c);
+      expect(s.shuffle).toBeNull();
+      expectClear(s, `seed ${seed}`);
+    }
+  });
+
+  it('after a new obstacle turns solid every live pickup keeps clearance from all pillars', () => {
+    for (let seed = 1; seed <= 150; seed++) {
+      const c = ctx(seed);
+      const base = drift.init(c);
+      let s: DriftState = {
+        ...base, coins: TOP, scheduleCoins: 4, nextPowerAt: null, x: 30.6, y: 10, coin: { x: 31, y: 10 },
+        pillars: base.pillars.filter((r) => !intersects(grown(r, 2), { x: 28, y: 9, w: 6, h: 3 })),
+      };
+      s = drift.update(s, c);
+      expect(s.pending).toHaveLength(1);
+      for (let i = 0; i < WARN_TICKS + 2 && s.pending.length > 0 && !s.crashed; i++) s = drift.update(hold(s), c);
+      expectClear(s, `seed ${seed}`);
+    }
+  });
+
+  it('a coin spawned while a pending pillar exists keeps clearance from it', () => {
+    const rect: Rect = { x: 3, y: 3, w: 54, h: 6 };
+    for (let seed = 1; seed <= 60; seed++) {
+      const s = drift.update(open({
+        x: 30.6, y: 12, coin: { x: 31, y: 12 }, coins: TOP - 1, pending: [{ kind: 'pillar', rect, ticksLeft: 30 }],
+      }), ctx(seed));
+      expect(s.coins).toBe(TOP);
+      expect(intersects(box(s.coin, speedForCoins(TOP)), rect)).toBe(false);
+    }
   });
 });

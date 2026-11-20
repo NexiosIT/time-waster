@@ -97,6 +97,12 @@ export function clearanceFor(speed: number): { cx: number; cy: number } {
   return { cx, cy: Math.ceil(cx / 2) };
 }
 
+/** The box around `p` that must stay free of pillars for a coin at `speed`. */
+export function clearBox(p: Point, speed: number): Rect {
+  const { cx, cy } = clearanceFor(speed);
+  return { x: p.x - cx, y: p.y - cy, w: 2 * cx + 1, h: 2 * cy + 1 };
+}
+
 function hasClearance(p: Point, cx: number, cy: number, pillars: Rect[]): boolean {
   for (let dy = -cy; dy <= cy; dy++)
     for (let dx = -cx; dx <= cx; dx++)
