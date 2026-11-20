@@ -32,7 +32,10 @@ export interface ReflexState {
   misses: number;
   elapsedMs: number;      // last run clock seen in update
   over: boolean;
+  flash: Flash | null;    // brief feedback at the last target's spot
 }
+
+export interface Flash { kind: 'hit' | 'miss'; x: number; y: number; n: number; msLeft: number }
 
 const multiplier = (streak: number) => (streak >= 25 ? 3 : streak >= 10 ? 2 : 1);
 
@@ -40,20 +43,20 @@ function init(_ctx: GameContext): ReflexState {
   return {
     target: null, x: 0, y: 0, prevX: -1, prevY: -1,
     gapLeft: GAP_MS, timeLeft: 0, lifetime: LIFE_START,
-    score: 0, streak: 0, hits: 0, misses: 0, elapsedMs: 0, over: false,
+    score: 0, streak: 0, hits: 0, misses: 0, elapsedMs: 0, over: false, flash: null,
   };
 }
 
 /** Back to the gap after a hit or miss. */
-function toGap(s: ReflexState): ReflexState {
-  return { ...s, target: null, prevX: s.x, prevY: s.y, gapLeft: GAP_MS, timeLeft: 0 };
+function toGap(s: ReflexState, flash: Flash): ReflexState {
+  return { ...s, flash, target: null, prevX: s.x, prevY: s.y, gapLeft: GAP_MS, timeLeft: 0 };
 }
 
 function miss(s: ReflexState): ReflexState {
   return toGap({
     ...s, misses: s.misses + 1, streak: 0,
     lifetime: Math.min(LIFE_START, s.lifetime + LIFE_MISS),
-  });
+  }, { kind: 'miss', x: s.x, y: s.y, n: 0, msLeft: GAP_MS });
 }
 
 function onKey(s: ReflexState, key: Key): ReflexState {
@@ -62,11 +65,12 @@ function onKey(s: ReflexState, key: Key): ReflexState {
   if (key !== s.target) return miss(s);
   const streak = s.streak + 1;
   const bonus = Math.round(10 * s.timeLeft / s.lifetime);
+  const gained = (10 + bonus) * multiplier(streak);
   return toGap({
     ...s, streak, hits: s.hits + 1,
-    score: s.score + (10 + bonus) * multiplier(streak),
+    score: s.score + gained,
     lifetime: Math.max(LIFE_MIN, s.lifetime - LIFE_HIT),
-  });
+  }, { kind: 'hit', x: s.x, y: s.y, n: gained, msLeft: GAP_MS });
 }
 
 function spawn(s: ReflexState, ctx: GameContext): ReflexState {
@@ -83,6 +87,10 @@ function spawn(s: ReflexState, ctx: GameContext): ReflexState {
 
 function update(prev: ReflexState, ctx: GameContext): ReflexState {
   let s: ReflexState = { ...prev, elapsedMs: ctx.elapsedMs };
+  if (s.flash) {
+    const msLeft = s.flash.msLeft - TICK_MS;
+    s = { ...s, flash: msLeft > 0 ? { ...s.flash, msLeft } : null };
+  }
   if (ctx.elapsedMs >= RUN_MS) return { ...s, over: true };
   if (s.over) return s;
   if (s.target === null) {
@@ -106,6 +114,16 @@ function draw(s: ReflexState, screen: Screen): void {
     `Time ${clock}   Streak ${s.streak} ×${multiplier(s.streak)}   Hits ${s.hits}  Misses ${s.misses}`,
     'white');
 
+  if (s.flash) {
+    const { x, y } = s.flash;
+    if (s.flash.kind === 'hit') {
+      screen.text(x, y + 1, `+${s.flash.n}`.slice(0, BOX).padEnd(BOX), 'brightGreen');
+    } else {
+      screen.text(x, y, '┌─┐', 'red');
+      screen.text(x, y + 1, '│✗│', 'red');
+      screen.text(x, y + 2, '└─┘', 'red');
+    }
+  }
   if (s.target === null) return;
   const c = fadeColor(s);
   const { x, y } = s;

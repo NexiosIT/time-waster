@@ -160,4 +160,47 @@ describe('reflex', () => {
       expect(writes).toBeGreaterThan(0);
     }
   });
+
+  describe('flash', () => {
+    const grab = (s: ReflexState) => {
+      const b = new CellBuffer(60, 20);
+      reflex.draw(s, b);
+      return b;
+    };
+
+    it('hit shows +N in brightGreen at the spot, then goes away', () => {
+      const c = ctx();
+      const t = toTarget(reflex.init(c), c);
+      const s = reflex.onKey(t, t.target!);
+      const n = reflex.score(s);
+      const b = grab(s);
+      const str = `+${n}`;
+      for (let i = 0; i < str.length; i++) {
+        expect(b.get(t.x + i, t.y + 1)).toEqual({ ch: str[i], color: 'brightGreen' });
+      }
+      let u = s;
+      for (let i = 0; i < 4; i++) u = reflex.update(u, c);
+      expect(u.flash).not.toBeNull();
+      u = reflex.update(u, c);
+      expect(u.flash).toBeNull();
+    });
+
+    it('wrong key draws red at the spot', () => {
+      const c = ctx();
+      const t = toTarget(reflex.init(c), c);
+      const s = reflex.onKey(t, wrongKey(t));
+      expect(grab(s).get(t.x + 1, t.y + 1).color).toBe('red');
+      expect(grab(s).get(t.x, t.y).color).toBe('red');
+    });
+
+    it('fade-out draws red at the spot and the flash expires', () => {
+      const c = ctx();
+      const t = toTarget(reflex.init(c), c);
+      let s = t;
+      while (s.misses === 0) s = reflex.update(s, c);
+      expect(grab(s).get(t.x + 1, t.y + 1).color).toBe('red');
+      for (let i = 0; i < 5; i++) s = reflex.update(s, c);
+      expect(s.flash).toBeNull();
+    });
+  });
 });
