@@ -730,7 +730,210 @@ function clearAlive(file) {
   }
 }
 
+// src/games/drift/arena.ts
+var START = { x: 6, y: 10 };
+var SAFE_ZONE = { x: 1, y: 7, w: 20, h: 7 };
+var MIN_COIN_DIST = 10;
+var ATTEMPTS_PER_PILLAR = 500;
+var MAX_RESTARTS = 20;
+var FALLBACK_PILLARS = [
+  { x: 24, y: 3, w: 3, h: 2 },
+  { x: 34, y: 3, w: 3, h: 2 },
+  { x: 44, y: 3, w: 3, h: 2 },
+  { x: 30, y: 14, w: 3, h: 2 },
+  { x: 44, y: 14, w: 3, h: 2 }
+];
+function isWall(p) {
+  return p.x <= 0 || p.y <= 0 || p.x >= GAME_WIDTH - 1 || p.y >= GAME_HEIGHT - 1;
+}
+function inRect(p, r) {
+  return p.x >= r.x && p.x < r.x + r.w && p.y >= r.y && p.y < r.y + r.h;
+}
+function isBlocked(p, pillars) {
+  return isWall(p) || pillars.some((r) => inRect(p, r));
+}
+var intersects = (a, b) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+var grown = (r, n) => ({ x: r.x - n, y: r.y - n, w: r.w + 2 * n, h: r.h + 2 * n });
+var randInt = (ctx, min, max) => min + Math.floor(ctx.random() * (max - min + 1));
+function tryPlace(count, ctx) {
+  const pillars = [];
+  while (pillars.length < count) {
+    let placed = false;
+    for (let a = 0; a < ATTEMPTS_PER_PILLAR && !placed; a++) {
+      const w = randInt(ctx, 2, 4);
+      const h = randInt(ctx, 1, 2);
+      const x = randInt(ctx, 3, 56 - w + 1);
+      const y = randInt(ctx, 3, 16 - h + 1);
+      const cand = { x, y, w, h };
+      if (intersects(cand, SAFE_ZONE)) continue;
+      if (pillars.some((q) => intersects(grown(cand, 2), q))) continue;
+      pillars.push(cand);
+      placed = true;
+    }
+    if (!placed) return null;
+  }
+  return pillars;
+}
+function generatePillars(ctx) {
+  const count = 5 + Math.floor(ctx.random() * 3);
+  for (let r = 0; r < MAX_RESTARTS; r++) {
+    const result = tryPlace(count, ctx);
+    if (result) return result;
+  }
+  return FALLBACK_PILLARS.map((p) => ({ ...p }));
+}
+function spawnCoin(car, pillars, ctx) {
+  const candidates = [];
+  for (let y = 1; y < GAME_HEIGHT - 1; y++) {
+    for (let x = 1; x < GAME_WIDTH - 1; x++) {
+      let clear = true;
+      for (let dy = -1; dy <= 1 && clear; dy++)
+        for (let dx = -1; dx <= 1; dx++)
+          if (isBlocked({ x: x + dx, y: y + dy }, pillars)) {
+            clear = false;
+            break;
+          }
+      if (clear) candidates.push({ x, y });
+    }
+  }
+  const far = candidates.filter((c) => Math.hypot(c.x - car.x, 2 * (c.y - car.y)) >= MIN_COIN_DIST);
+  const pool = far.length > 0 ? far : candidates;
+  return pool[Math.floor(ctx.random() * pool.length)];
+}
+
+// src/games/drift/physics.ts
+var TICK_MS = 50;
+var START_SPEED = 8;
+var MAX_SPEED = 24;
+var COINS_TO_MAX = 20;
+var GRIP_SLOW = 0.35;
+var GRIP_FAST = 0.1;
+var DRIFT_THRESHOLD = 0.3;
+var TAU = 2 * Math.PI;
+function headingAngle(h) {
+  return h * (Math.PI / 4);
+}
+function rotateHeading(h, dir) {
+  return ((h + dir) % 8 + 8) % 8;
+}
+function speedForCoins(coins) {
+  const t = Math.min(coins, COINS_TO_MAX) / COINS_TO_MAX;
+  return START_SPEED + (MAX_SPEED - START_SPEED) * Math.sqrt(t);
+}
+function gripFor(speed) {
+  const t = Math.min(Math.max((speed - START_SPEED) / (MAX_SPEED - START_SPEED), 0), 1);
+  return GRIP_SLOW + (GRIP_FAST - GRIP_SLOW) * t;
+}
+function angleDiff(from, to) {
+  const x = ((to - from) % TAU + TAU) % TAU;
+  return x > Math.PI ? x - TAU : x;
+}
+function turnToward(travel, target, maxStep, lastTurn) {
+  let d = angleDiff(travel, target);
+  if (Math.abs(Math.abs(d) - Math.PI) < 1e-9) d = Math.PI * lastTurn;
+  const step = Math.min(Math.max(d, -maxStep), maxStep);
+  return ((travel + step) % TAU + TAU) % TAU;
+}
+function isDrifting(travel, heading) {
+  return Math.abs(angleDiff(travel, headingAngle(heading))) > DRIFT_THRESHOLD;
+}
+
+// src/games/drift/index.ts
+var TRAIL_LEN = 6;
+var CAR = ["\u2192", "\u2198", "\u2193", "\u2199", "\u2190", "\u2196", "\u2191", "\u2197"];
+function cellOf(s) {
+  return { x: Math.round(s.x), y: Math.round(s.y) };
+}
+var samePoint = (a, b) => a.x === b.x && a.y === b.y;
+function init(ctx) {
+  const pillars = generatePillars(ctx);
+  return {
+    x: START.x,
+    y: START.y,
+    heading: 0,
+    travel: 0,
+    lastTurn: 1,
+    coins: 0,
+    coin: spawnCoin(START, pillars, ctx),
+    pillars,
+    trail: [],
+    crashed: false
+  };
+}
+function onKey(state, key) {
+  if (state.crashed) return state;
+  if (key === "right") return { ...state, heading: rotateHeading(state.heading, 1), lastTurn: 1 };
+  if (key === "left") return { ...state, heading: rotateHeading(state.heading, -1), lastTurn: -1 };
+  return state;
+}
+function update(state, ctx) {
+  if (state.crashed) return state;
+  const speed = speedForCoins(state.coins);
+  const travel = turnToward(state.travel, headingAngle(state.heading), gripFor(speed), state.lastTurn);
+  const dx = Math.cos(travel) * speed * TICK_MS / 1e3;
+  const dy = Math.sin(travel) * speed * TICK_MS / 1e3 * 0.5;
+  const n = Math.max(1, Math.ceil(Math.max(Math.abs(dx), Math.abs(dy))));
+  let { x, y, coins, coin, trail } = state;
+  let crashed = false;
+  for (let i = 0; i < n; i++) {
+    x += dx / n;
+    y += dy / n;
+    const cell2 = cellOf({ x, y });
+    if (isBlocked(cell2, state.pillars)) {
+      crashed = true;
+      break;
+    }
+    if (samePoint(cell2, coin)) {
+      coins += 1;
+      coin = spawnCoin(cell2, state.pillars, ctx);
+    }
+    if (trail.length === 0 || !samePoint(trail[0], cell2)) trail = [cell2, ...trail].slice(0, TRAIL_LEN);
+  }
+  return { ...state, x, y, travel, coins, coin, trail, crashed };
+}
+function draw(state, screen) {
+  const W = GAME_WIDTH - 1, H = GAME_HEIGHT - 1;
+  for (let x = 1; x < W; x++) {
+    screen.put(x, 0, "\u2500", "gray");
+    screen.put(x, H, "\u2500", "gray");
+  }
+  for (let y = 1; y < H; y++) {
+    screen.put(0, y, "\u2502", "gray");
+    screen.put(W, y, "\u2502", "gray");
+  }
+  screen.put(0, 0, "\u250C", "gray");
+  screen.put(W, 0, "\u2510", "gray");
+  screen.put(0, H, "\u2514", "gray");
+  screen.put(W, H, "\u2518", "gray");
+  for (const r of state.pillars) {
+    for (let y = r.y; y < r.y + r.h; y++)
+      for (let x = r.x; x < r.x + r.w; x++) screen.put(x, y, "\u2588", "blue");
+  }
+  const car = cellOf(state);
+  if (isDrifting(state.travel, state.heading)) {
+    for (const t of state.trail) if (!samePoint(t, car)) screen.put(t.x, t.y, "\xB7", "gray");
+  }
+  screen.put(state.coin.x, state.coin.y, "\u25CF", "yellow");
+  screen.put(car.x, car.y, CAR[state.heading], state.crashed ? "red" : "brightCyan");
+}
+var drift = {
+  id: "drift",
+  title: "Drift",
+  description: "Drift for coins. Every coin is faster. Don't touch the walls.",
+  tickMs: TICK_MS,
+  controls: "\u2190\u2192 steer",
+  init,
+  onKey,
+  update,
+  draw,
+  score: (s) => s.coins * 10,
+  isOver: (s) => s.crashed
+};
+var drift_default = drift;
+
 // src/games/worm/index.ts
+var BOARD_W = Math.floor((GAME_WIDTH - 2) / 2);
+var BOARD_H = GAME_HEIGHT - 2;
 var STEP = {
   up: { x: 0, y: -1 },
   down: { x: 0, y: 1 },
@@ -741,29 +944,41 @@ var OPPOSITE = { up: "down", down: "up", left: "right", right: "left" };
 var same = (a, b) => a.x === b.x && a.y === b.y;
 function spawnDot(body, ctx) {
   const free = [];
-  for (let y = 0; y < GAME_HEIGHT; y++) {
-    for (let x = 0; x < GAME_WIDTH; x++) {
+  for (let y = 0; y < BOARD_H; y++) {
+    for (let x = 0; x < BOARD_W; x++) {
       if (!body.some((p) => p.x === x && p.y === y)) free.push({ x, y });
     }
   }
   if (free.length === 0) return null;
   return free[Math.floor(ctx.random() * free.length)];
 }
-function init(ctx) {
-  const cx = GAME_WIDTH / 2, cy = GAME_HEIGHT / 2;
+function init2(ctx) {
+  const cx = Math.floor(BOARD_W / 2), cy = Math.floor(BOARD_H / 2);
   const body = [{ x: cx, y: cy }, { x: cx - 1, y: cy }, { x: cx - 2, y: cy }];
-  return { body, moved: "right", pending: "right", dot: spawnDot(body, ctx), score: 0, over: false };
+  return {
+    body,
+    moved: "right",
+    pending: "right",
+    dot: spawnDot(body, ctx),
+    score: 0,
+    over: false,
+    turbo: false,
+    tick: 0
+  };
 }
-function onKey(state, key) {
+function onKey2(state, key) {
+  if (key === "space") return { ...state, turbo: !state.turbo };
   if (key !== "up" && key !== "down" && key !== "left" && key !== "right") return state;
   if (key === OPPOSITE[state.moved]) return state;
   return { ...state, pending: key };
 }
-function update(state, ctx) {
+function update2(prev2, ctx) {
+  const state = { ...prev2, tick: prev2.tick + 1 };
+  if (!state.turbo && state.tick % 2 === 1) return state;
   const head = state.body[0];
   const step = STEP[state.pending];
   const next = { x: head.x + step.x, y: head.y + step.y };
-  if (next.x < 0 || next.x >= GAME_WIDTH || next.y < 0 || next.y >= GAME_HEIGHT) {
+  if (next.x < 0 || next.x >= BOARD_W || next.y < 0 || next.y >= BOARD_H) {
     return { ...state, over: true };
   }
   const eats = state.dot !== null && same(next, state.dot);
@@ -774,30 +989,53 @@ function update(state, ctx) {
   const dot = spawnDot(body, ctx);
   return { ...state, body, moved: state.pending, score: state.score + 10, dot, over: dot === null };
 }
-function draw(state, screen) {
-  if (state.dot) screen.put(state.dot.x, state.dot.y, "\u25CF", "yellow");
+var BORDER = "gray";
+function drawBorder(state, screen) {
+  const r = GAME_WIDTH - 1, b = GAME_HEIGHT - 1;
+  for (let x = 1; x < r; x++) {
+    screen.put(x, 0, "\u2500", BORDER);
+    screen.put(x, b, "\u2500", BORDER);
+  }
+  for (let y = 1; y < b; y++) {
+    screen.put(0, y, "\u2502", BORDER);
+    screen.put(r, y, "\u2502", BORDER);
+  }
+  screen.put(0, 0, "\u250C", BORDER);
+  screen.put(r, 0, "\u2510", BORDER);
+  screen.put(0, b, "\u2514", BORDER);
+  screen.put(r, b, "\u2518", BORDER);
+  if (state.turbo) screen.text(GAME_WIDTH - 10, 0, " TURBO ", "brightYellow");
+}
+function cell(screen, p, chars, color) {
+  screen.put(1 + p.x * 2, 1 + p.y, chars[0], color);
+  screen.put(2 + p.x * 2, 1 + p.y, chars[1], color);
+}
+function draw2(state, screen) {
+  drawBorder(state, screen);
+  if (state.dot) cell(screen, state.dot, "\u25CF ", "yellow");
   state.body.forEach((p, i) => {
-    if (i === 0) screen.put(p.x, p.y, "\u2593", "brightGreen");
-    else screen.put(p.x, p.y, "\u2588", "green");
+    if (i === 0) cell(screen, p, "\u2593\u2593", "brightGreen");
+    else cell(screen, p, "\u2588\u2588", "green");
   });
 }
 var worm = {
   id: "worm",
   title: "Worm",
   description: "Eat dots, grow longer, don't bite yourself.",
-  tickMs: 120,
-  controls: "\u2190\u2191\u2192\u2193 turn",
-  init,
-  onKey,
-  update,
-  draw,
+  tickMs: 60,
+  // normal speed moves every other tick (120 ms), turbo every tick
+  controls: "\u2190\u2191\u2192\u2193 Spc turbo",
+  init: init2,
+  onKey: onKey2,
+  update: update2,
+  draw: draw2,
   score: (s) => s.score,
   isOver: (s) => s.over
 };
 var worm_default = worm;
 
 // src/games/registry.generated.ts
-var games = [worm_default];
+var games = [drift_default, worm_default];
 
 // src/arcade.ts
 if (!process.stdout.isTTY || !process.stdin.isTTY) {
