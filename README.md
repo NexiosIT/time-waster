@@ -49,7 +49,8 @@ When you send a prompt, the plugin asks Claude to start its reply with a line li
  Claude ~6 min left  ·  suggested: Reflex (~1 min, new)
 ```
 
-`, new` means you have not finished that game yet (see `NEW` below).
+`, new` means that game is still `NEW`: fewer than 3 finished runs for a `rounds`/`open`
+game, none for a `timed` game (see `NEW` below).
 
 The suggested game is pre-selected and marked `★`; it is only a suggestion, so you can
 pick any other game, and a run is never ended because Claude finished. Other menu text:
