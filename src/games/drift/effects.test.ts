@@ -52,4 +52,10 @@ describe('effects', () => {
     expect(gripNow(s, addEffect([], 'slick'), false)).toBe(LOW_GRIP);
     expect(gripNow(MAX_SPEED, [], false)).toBe(GRIP_FAST);
   });
+
+  it('slick stays survivable: LOW_GRIP is 0.05 and slick lasts 60 ticks', () => {
+    expect(LOW_GRIP).toBe(0.05);
+    expect(DURATION.slick).toBe(60);
+    expect(LOW_GRIP).toBeLessThan(GRIP_FAST);
+  });
 });

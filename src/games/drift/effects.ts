@@ -4,11 +4,11 @@ export type EffectKind = 'double' | 'grip' | 'rain' | 'nitro' | 'shield' | 'slic
 export interface Effect { kind: EffectKind; ticksLeft: number }
 
 export const DURATION: Record<EffectKind, number> =
-  { double: 200, grip: 120, rain: 120, nitro: 100, shield: 200, slick: 80 };
+  { double: 200, grip: 120, rain: 120, nitro: 100, shield: 200, slick: 60 };
 export const NITRO_SPEED = 1.5;
 export const NITRO_VALUE = 3;
 export const DOUBLE_VALUE = 2;
-export const LOW_GRIP = 0.02;
+export const LOW_GRIP = 0.05;
 
 const CANCELS: Partial<Record<EffectKind, EffectKind>> = { grip: 'slick', slick: 'grip' };
 
