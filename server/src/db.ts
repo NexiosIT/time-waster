@@ -1,15 +1,16 @@
 import { DatabaseSync } from 'node:sqlite';
+import { BOARD_LIMIT } from './limits';
 
 export type Db = { raw: DatabaseSync };
 export type BoardRow = { rank: number; login: string; score: number; at: string };
-
-const SCHEMA_VERSION = 1;
+/** A score posted from the browser under a typed name; never linked to a player. */
+export type WebRow = { rank: number; name: string; score: number; at: string };
 
 export function openDb(path: string): Db {
   const raw = new DatabaseSync(path);
   const { user_version } = raw.prepare('PRAGMA user_version').get() as { user_version: number };
   // A newer schema (user_version > 1) is left as it is: never downgrade.
-  if (user_version < 1) migrate(raw, `
+  if (user_version < 1) migrate(raw, 1, `
       CREATE TABLE players (
         id INTEGER PRIMARY KEY,
         login TEXT NOT NULL,
@@ -34,14 +35,26 @@ export function openDb(path: string): Db {
       );
       CREATE INDEX best_game_score ON best(game, score DESC, received_at);
     `);
+  if (user_version < 2) migrate(raw, 2, `
+      CREATE TABLE web_best (
+        game TEXT NOT NULL,
+        name TEXT NOT NULL,
+        name_key TEXT NOT NULL,
+        score INTEGER NOT NULL,
+        at TEXT NOT NULL,
+        submissions INTEGER NOT NULL DEFAULT 1,
+        PRIMARY KEY (game, name_key)
+      );
+      CREATE INDEX web_best_game_score ON web_best(game, score DESC, at);
+    `);
   return { raw };
 }
 
-/** Runs one migration step and sets user_version, all or nothing. */
-function migrate(raw: DatabaseSync, sql: string): void {
+/** Runs one migration step and sets user_version to `version`, all or nothing. */
+function migrate(raw: DatabaseSync, version: number, sql: string): void {
   inTransaction(raw, () => {
     raw.exec(sql);
-    raw.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
+    raw.exec(`PRAGMA user_version = ${version}`);
   });
 }
 
@@ -211,5 +224,51 @@ export function deleteScore(db: Db, login: string, game: string): boolean {
   const res = db.raw
     .prepare('DELETE FROM best WHERE game = ? AND player_id IN (SELECT id FROM players WHERE lower(login) = lower(?))')
     .run(game, login);
+  return Number(res.changes) > 0;
+}
+
+/** The web top `limit` for `game`: best score first, older entry first on a tie. */
+export function webBoard(db: Db, game: string, limit: number): WebRow[] {
+  const rows = db.raw
+    .prepare('SELECT name, score, at FROM web_best WHERE game = ? ORDER BY score DESC, at ASC, name_key ASC LIMIT ?')
+    .all(game, limit) as { name: string; score: number; at: string }[];
+  return rows.map((r, i) => ({ rank: i + 1, name: r.name, score: r.score, at: r.at }));
+}
+
+/**
+ * Records a web score under `name` (already normalised). A higher score than the name's
+ * best replaces score, time and display casing; anything else only counts the submission.
+ */
+export function submitWebScore(
+  db: Db, game: string, name: string, score: number, now: Date,
+): { rank: number | null; best: number; top: WebRow[] } {
+  const key = name.toLowerCase();
+  const at = now.toISOString();
+  const best = inTransaction(db.raw, () => {
+    const cur = db.raw
+      .prepare('SELECT score FROM web_best WHERE game = ? AND name_key = ?')
+      .get(game, key) as { score: number } | undefined;
+    if (!cur) {
+      db.raw
+        .prepare('INSERT INTO web_best (game, name, name_key, score, at, submissions) VALUES (?, ?, ?, ?, ?, 1)')
+        .run(game, name, key, score, at);
+      return score;
+    }
+    if (score > cur.score) {
+      db.raw
+        .prepare('UPDATE web_best SET name = ?, score = ?, at = ?, submissions = submissions + 1 WHERE game = ? AND name_key = ?')
+        .run(name, score, at, game, key);
+      return score;
+    }
+    db.raw.prepare('UPDATE web_best SET submissions = submissions + 1 WHERE game = ? AND name_key = ?').run(game, key);
+    return cur.score;
+  });
+  const top = webBoard(db, game, BOARD_LIMIT);
+  const mine = top.find((r) => r.name.toLowerCase() === key);
+  return { rank: mine ? mine.rank : null, best, top };
+}
+
+export function deleteWebScore(db: Db, name: string, game: string): boolean {
+  const res = db.raw.prepare('DELETE FROM web_best WHERE game = ? AND name_key = ?').run(game, name.toLowerCase());
   return Number(res.changes) > 0;
 }
