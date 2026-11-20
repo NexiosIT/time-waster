@@ -13,3 +13,7 @@ export function scoresFile(home?: string): string {
 export function binDir(home?: string): string {
   return path.join(dataDir(home), 'bin');
 }
+/** Heartbeat a running arcade refreshes; tells the auto-launcher one is already open. */
+export function aliveFile(home?: string): string {
+  return path.join(dataDir(home), 'arcade.alive');
+}
