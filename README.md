@@ -47,10 +47,12 @@ add the bin folder to your PATH once. Run this in PowerShell, then open a new te
 | Menu    | Up / Down      | Select a game                                     |
 | Menu    | Enter          | Play                                              |
 | Menu    | Q              | Quit the arcade                                   |
+| Menu    | O              | Share scores online / your online account (when online scores are on) |
 | In game | P              | Pause / resume                                    |
 | In game | Esc            | End the run (score is saved), back to the menu    |
 | Results | Enter           | Play again                                        |
 | Results | Esc             | Back to the menu                                  |
+| Results | Tab             | Switch between your scores and the world board (when online scores are on) |
 | Crash   | Enter / Esc     | Back to the menu                                  |
 | Anywhere | Ctrl+C         | Save a run in progress, restore terminal, exit    |
 
@@ -64,8 +66,31 @@ Everything is under `%USERPROFILE%\.time-waster\`:
 - `events.jsonl` - recent Claude done / needs-you events written by the plugin hooks
 - `bin\arcade.cmd` - the `arcade` command shim
 - `arcade.alive` - heartbeat of an open arcade, so the plugin does not open a second one
+- `online.json` - your online session (server, session token, GitHub username), only once you sign in
+- `outbox.jsonl` - finished runs waiting to be sent to the online board, only once you sign in
 
-Scores are per machine; nothing is sent anywhere.
+Scores are per machine and nothing is sent anywhere, unless you join the online high scores.
+
+## Online high scores
+
+Sharing scores is opt-in. Until you sign in, nothing leaves your PC; the menu only shows
+the world best per game next to your own best.
+
+To join, press **O** in the menu. The arcade shows a GitHub address and a short code: open
+the address in a browser, enter the code and approve. You never type your GitHub password
+into the arcade, and the arcade never keeps a GitHub token. From then on every finished
+run is sent to the shared board; on the results screen, **Tab** switches between your own
+scores and the world top 10 with your rank.
+
+What the server stores: your GitHub numeric id and username, and your scores. Nothing else.
+
+To leave, press **O** in the menu while signed in:
+
+- **S** signs out on this PC; your online scores stay on the board.
+- **D** signs out and deletes all your online scores (asks Y/N first).
+
+If you cannot reach the arcade any more, open an issue on this repository and we remove
+your data. Running the score server yourself: see [server/README.md](server/README.md).
 
 ## Add a game
 
