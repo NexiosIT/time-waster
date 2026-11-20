@@ -1,0 +1,11 @@
+{
+  "name": "time-waster",
+  "owner": { "name": "Nexios" },
+  "plugins": [
+    {
+      "name": "time-waster",
+      "source": "./",
+      "description": "A terminal arcade for the moments Claude is busy."
+    }
+  ]
+}
