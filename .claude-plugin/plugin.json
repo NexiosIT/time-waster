@@ -1,0 +1,7 @@
+{
+  "name": "time-waster",
+  "version": "0.1.0",
+  "description": "A terminal arcade for the moments Claude is busy. Signals you when Claude is done or needs you.",
+  "author": { "name": "Nexios" },
+  "repository": "https://github.com/NexiosIT/time-waster"
+}
