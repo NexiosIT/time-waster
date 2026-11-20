@@ -7,7 +7,7 @@ instructions: "Read docs/adding-a-game.md and build me a game called ...".
 
 ## Rules (read these first)
 
-- Touch **only** `src/games/<id>/`. No edits to `src/core/`, other games, `package.json`
+- Touch **only** `src/games/<id>/`. No edits to `src/core/`, other games, `dist/`, `package.json`
   or any generated file.
 - `<id>` is the folder name and the high-score key. It must match `/^[a-z0-9-]+$/`.
 - Start by copying `src/games/worm/` (it is the reference implementation) and renaming.
@@ -79,11 +79,20 @@ Write `src/games/<id>/<id>.test.ts` and test **through the contract** with a fix
 like `src/games/worm/worm.test.ts`:
 
 ```ts
+import { describe, it, expect } from 'vitest';
 import { createRandom } from '../../core/random';
+import game from './index';
+
 const ctx = { random: createRandom(1), elapsedMs: 0 };
-const s0 = mygame.init(ctx);
-const s1 = mygame.update(mygame.onKey(s0, 'left'), ctx);
-expect(mygame.score(s1)).toBe(0);
+
+describe('my game', () => {
+  it('starts at score 0 and survives a tick', () => {
+    const s0 = game.init(ctx);
+    const s1 = game.update(game.onKey(s0, 'left'), ctx);
+    expect(game.score(s1)).toBe(0);
+    expect(game.isOver(s1)).toBe(false);
+  });
+});
 ```
 
 Cover: initial state, that `onKey` and `update` don't mutate their input, the scoring
@@ -91,5 +100,7 @@ rule, and when `isOver` becomes true.
 
 ## Commit
 
-Run `npm run build` and commit your folder **and** the rebuilt `dist/`. The plugin is
-installed straight from git with no install step, so `dist/` must be committed.
+Commit your `src/games/<id>/` folder only. **Do not commit `dist/`** on your branch
+(run `npm run build` locally to play). After the branch is merged to `main`, whoever
+merges runs `npm run build` and commits the rebuilt `dist/` on `main`; the plugin is
+installed straight from git, so `dist/` is committed there and only there.

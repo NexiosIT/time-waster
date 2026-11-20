@@ -45,7 +45,10 @@ Restart Claude Code. On session start the plugin creates
 | Menu    | Q              | Quit the arcade                                   |
 | In game | P              | Pause / resume                                    |
 | In game | Esc            | End the run (score is saved), back to the menu    |
-| Anywhere| Ctrl+C         | Restore the terminal and exit                     |
+| Results | Enter           | Play again                                        |
+| Results | Esc             | Back to the menu                                  |
+| Crash   | Enter           | Back to the menu                                  |
+| Anywhere | Ctrl+C         | Restore the terminal and exit                     |
 
 All other keys go to the game; each game shows its own controls in the status line.
 
@@ -67,8 +70,10 @@ See [docs/adding-a-game.md](docs/adding-a-game.md). A game is one folder in
 ## The `dist/` rule
 
 The plugin is installed straight from git and there is no install step, so the built
-`dist/` folder (`arcade.js`, `signal.js`, `launch.js`) **is committed**. After changing
-anything under `src/`, run `npm run build` and commit `dist/` with your change.
+`dist/` folder (`arcade.js`, `signal.js`, `launch.js`) is committed **on `main` only**.
+Game and feature branches never commit `dist/` (run `npm run build` locally to play),
+which avoids merge conflicts. After merging to `main`, whoever merges runs
+`npm run build` and commits `dist/` on `main`.
 
 ## Develop
 

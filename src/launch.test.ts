@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { launchCommand, isOnPath } from './launch';
+import { launchCommand, isOnPath, spawnDetached } from './launch';
 
 describe('launchCommand', () => {
   it('uses Windows Terminal when available, arcade path as one argv element', () => {
@@ -50,5 +50,15 @@ describe('isOnPath', () => {
   it('is false when absent, and ignores empty entries', () => {
     expect(isOnPath(dir, 'C:\\Windows;;C:\\x;')).toBe(false);
     expect(isOnPath(dir, '')).toBe(false);
+  });
+});
+
+describe('spawnDetached', () => {
+  it('reports a failure message when the program cannot start', async () => {
+    const msg = await spawnDetached({ file: 'definitely-not-a-real-program-xyz', args: [], verbatim: false });
+    expect(msg).toMatch(/ENOENT/);
+  });
+  it('resolves null when the program starts', async () => {
+    expect(await spawnDetached({ file: process.execPath, args: ['-e', '0'], verbatim: false })).toBeNull();
   });
 });

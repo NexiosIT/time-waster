@@ -32,7 +32,8 @@ var launch_exports = {};
 __export(launch_exports, {
   isOnPath: () => isOnPath,
   launchCommand: () => launchCommand,
-  main: () => main
+  main: () => main,
+  spawnDetached: () => spawnDetached
 });
 module.exports = __toCommonJS(launch_exports);
 var path2 = __toESM(require("node:path"));
@@ -61,19 +62,38 @@ function isOnPath(dir, pathEnv) {
   const want = norm(dir);
   return pathEnv.split(";").filter((e) => e.length > 0).some((e) => norm(e) === want);
 }
-function main() {
+function spawnDetached(cmd, timeoutMs = 2e3) {
+  return new Promise((resolve2) => {
+    try {
+      const child = (0, import_node_child_process.spawn)(cmd.file, cmd.args, {
+        detached: true,
+        stdio: "ignore",
+        windowsVerbatimArguments: cmd.verbatim
+      });
+      const timer = setTimeout(() => resolve2(null), timeoutMs);
+      child.once("error", (e) => {
+        clearTimeout(timer);
+        resolve2(e.message);
+      });
+      child.once("spawn", () => {
+        clearTimeout(timer);
+        child.unref();
+        resolve2(null);
+      });
+    } catch (e) {
+      resolve2(e instanceof Error ? e.message : String(e));
+    }
+  });
+}
+async function main() {
   try {
     const root = process.env.CLAUDE_PLUGIN_ROOT ?? path2.resolve(__dirname, "..");
     const hasWt = (0, import_node_child_process.spawnSync)("where", ["wt"], { stdio: "ignore" }).status === 0;
-    const cmd = launchCommand(root, hasWt);
-    const child = (0, import_node_child_process.spawn)(cmd.file, cmd.args, {
-      detached: true,
-      stdio: "ignore",
-      windowsVerbatimArguments: cmd.verbatim
-    });
-    child.on("error", () => {
-    });
-    child.unref();
+    const failure = await spawnDetached(launchCommand(root, hasWt));
+    if (failure) {
+      console.log("Could not open the arcade: " + failure);
+      return;
+    }
     console.log("Arcade opened.");
     if (!isOnPath(binDir(), process.env.PATH ?? process.env.Path ?? "")) {
       console.log("To start the arcade while Claude is busy, run once in PowerShell, then open a new terminal:");
@@ -82,15 +102,16 @@ function main() {
       );
     }
   } catch (e) {
-    console.log(`Could not open the arcade: ${e instanceof Error ? e.message : String(e)}`);
+    console.log("Could not open the arcade: " + (e instanceof Error ? e.message : String(e)));
   }
 }
 if (require.main === module) {
-  main();
+  void main().then(() => process.exit(0));
 }
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
   isOnPath,
   launchCommand,
-  main
+  main,
+  spawnDetached
 });

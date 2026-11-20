@@ -30,18 +30,40 @@ export function isOnPath(dir: string, pathEnv: string): boolean {
     .some((e) => norm(e) === want);
 }
 
-export function main(): void {
+/** Spawn detached; resolves null once the process started, or a message if it failed to start. */
+export function spawnDetached(cmd: LaunchCommand, timeoutMs = 2000): Promise<string | null> {
+  return new Promise((resolve) => {
+    try {
+      const child = spawn(cmd.file, cmd.args, {
+        detached: true,
+        stdio: 'ignore',
+        windowsVerbatimArguments: cmd.verbatim,
+      });
+      const timer = setTimeout(() => resolve(null), timeoutMs); // no news is good news
+      child.once('error', (e) => {
+        clearTimeout(timer);
+        resolve(e.message);
+      });
+      child.once('spawn', () => {
+        clearTimeout(timer);
+        child.unref();
+        resolve(null);
+      });
+    } catch (e) {
+      resolve(e instanceof Error ? e.message : String(e));
+    }
+  });
+}
+
+export async function main(): Promise<void> {
   try {
     const root = process.env.CLAUDE_PLUGIN_ROOT ?? path.resolve(__dirname, '..');
     const hasWt = spawnSync('where', ['wt'], { stdio: 'ignore' }).status === 0;
-    const cmd = launchCommand(root, hasWt);
-    const child = spawn(cmd.file, cmd.args, {
-      detached: true,
-      stdio: 'ignore',
-      windowsVerbatimArguments: cmd.verbatim,
-    });
-    child.on('error', () => {});
-    child.unref();
+    const failure = await spawnDetached(launchCommand(root, hasWt));
+    if (failure) {
+      console.log('Could not open the arcade: ' + failure);
+      return;
+    }
     console.log('Arcade opened.');
     if (!isOnPath(binDir(), process.env.PATH ?? process.env.Path ?? '')) {
       console.log('To start the arcade while Claude is busy, run once in PowerShell, then open a new terminal:');
@@ -50,10 +72,10 @@ export function main(): void {
       );
     }
   } catch (e) {
-    console.log(`Could not open the arcade: ${e instanceof Error ? e.message : String(e)}`);
+    console.log('Could not open the arcade: ' + (e instanceof Error ? e.message : String(e)));
   }
 }
 
 if (require.main === module) {
-  main();
+  void main().then(() => process.exit(0));
 }
