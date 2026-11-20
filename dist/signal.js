@@ -81,14 +81,40 @@ function binDir(home) {
 function main(argv, stdinText, home) {
   try {
     const cmd = argv[0];
-    if (cmd === "done" || cmd === "attention") {
+    const { cwd: cwdFlag, positional } = parseArgs(argv.slice(1));
+    if (cmd === "attention") {
       const ev = toEvent(cmd, stdinText, /* @__PURE__ */ new Date());
       if (ev) appendEvent(eventsFile(home), ev);
+    } else if (cmd === "done") {
+      const ev = toEvent(cmd, stdinText, /* @__PURE__ */ new Date());
+      if (ev) {
+        if (cwdFlag !== void 0) ev.project = path3.win32.basename(cwdFlag);
+        else if (ev.project === "") ev.project = path3.win32.basename(process.cwd());
+        appendEvent(eventsFile(home), ev);
+      }
+    } else if (cmd === "start" || cmd === "estimate") {
+      const project = path3.win32.basename(cwdFlag ?? process.cwd());
+      const at = (/* @__PURE__ */ new Date()).toISOString();
+      if (cmd === "start") {
+        appendEvent(eventsFile(home), { type: "start", at, project });
+      } else if (/^\d+$/.test(positional[0] ?? "")) {
+        const minutes = Number(positional[0]);
+        if (minutes >= 1 && minutes <= 120) appendEvent(eventsFile(home), { type: "estimate", minutes, at, project });
+      }
     } else if (cmd === "shim") {
       writeShim(binDir(home), process.env.CLAUDE_PLUGIN_ROOT ?? path3.resolve(__dirname, ".."));
     }
   } catch {
   }
+}
+function parseArgs(rest) {
+  let cwd;
+  const positional = [];
+  for (let i = 0; i < rest.length; i++) {
+    if (rest[i] === "--cwd" && i + 1 < rest.length) cwd = rest[++i];
+    else positional.push(rest[i]);
+  }
+  return { cwd, positional };
 }
 function readStdin(timeoutMs) {
   return new Promise((resolve2) => {
