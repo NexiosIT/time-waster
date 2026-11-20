@@ -17,6 +17,8 @@ import { drawAccount, drawMenuHint, drawSignIn, drawWorld } from './onlineScreen
 import { Heckler } from './heckler';
 import { createRandom } from './random';
 import { loadSettings, saveSettings } from './settings';
+import { SoundDj } from './sounds';
+import type { SoundPort } from './sounds';
 
 export interface AppOptions {
   games: Game<any>[];
@@ -27,8 +29,10 @@ export interface AppOptions {
   startGameId?: string;
   /** Absent: no online UI at all. */
   online?: OnlinePort;
-  /** Player settings (heckling on/off). Absent: no heckling and no H toggle. */
+  /** Player settings (heckling and sound on/off). Absent: no heckling and no H toggle. */
   settingsFile?: string;
+  /** Plays random arcade sounds during a run. Absent: silent and no S toggle. */
+  sound?: SoundPort;
 }
 
 type ScreenName = 'menu' | 'playing' | 'results' | 'crashed' | 'signin' | 'account';
@@ -68,6 +72,9 @@ export class App {
   private heckleOn = false;
   private heckler: Heckler;
   private runLine: string | null = null;
+  private sound: SoundPort | undefined;
+  private soundOn = false;
+  private dj: SoundDj;
 
   constructor(opts: AppOptions) {
     const seen = new Set<string>();
@@ -84,7 +91,11 @@ export class App {
     this.online = opts.online;
     this.heckler = new Heckler(createRandom(this.seed ^ 0x5eed));
     this.settingsFile = opts.settingsFile;
-    if (this.settingsFile) this.heckleOn = loadSettings(this.settingsFile).heckle;
+    this.sound = opts.sound;
+    this.dj = new SoundDj(createRandom(this.seed ^ 0xb1eeb));
+    const settings = this.settingsFile ? loadSettings(this.settingsFile) : null;
+    if (settings) this.heckleOn = settings.heckle;
+    this.soundOn = !!this.sound && (settings ? settings.sound : true);
     this.refreshBest();
     this.preselect(opts.nowMs);
     const start = opts.startGameId ? this.games.find((g) => g.id === opts.startGameId) : undefined;
@@ -105,6 +116,7 @@ export class App {
         else if (k === 'enter' && this.games[this.sel]) this.start(this.games[this.sel], nowMs);
         else if (k === 'o' && this.online) this.openOnline();
         else if (k === 'h' && this.settingsFile) this.toggleHeckling();
+        else if (k === 's' && this.sound) this.toggleSound();
         break;
       case 'signin':
         if (k === 'escape') {
@@ -151,16 +163,36 @@ export class App {
     if (this.screen !== 'playing') return;
     this.session!.tick(nowMs);
     this.heckle(nowMs);
+    this.playSounds();
     this.afterRun();
   }
 
   private toggleHeckling(): void {
     this.heckleOn = !this.heckleOn;
+    this.saveSettings();
+  }
+
+  private toggleSound(): void {
+    this.soundOn = !this.soundOn;
+    if (!this.soundOn) this.sound!.stop();
+    this.saveSettings();
+  }
+
+  private saveSettings(): void {
+    if (!this.settingsFile) return;
     try {
-      saveSettings(this.settingsFile!, { heckle: this.heckleOn });
+      saveSettings(this.settingsFile, { heckle: this.heckleOn, sound: this.soundOn });
     } catch {
       // keeps working for this session; not remembered
     }
+  }
+
+  /** A random arcade sound now and then, in play time: never while paused. */
+  private playSounds(): void {
+    const s = this.session;
+    if (!this.soundOn || !s || s.status !== 'playing') return;
+    const sound = this.dj.tick(s.playedMs);
+    if (sound) this.sound!.play(sound.notes);
   }
 
   private heckle(nowMs: number): void {
@@ -235,6 +267,7 @@ export class App {
     this.results = null;
     this.session = new GameSession(game, { seed: this.seed + this.runs++, nowMs });
     this.heckler.startRun();
+    this.dj.startRun();
     this.screen = 'playing';
     this.afterRun();
   }
@@ -392,8 +425,12 @@ export class App {
       });
       area.text(0, 17, clip(this.games[this.sel].description, GAME_WIDTH), 'gray');
       if (online) drawMenuHint(area, online.account());
-      if (this.settingsFile) {
-        const hint = `H: heckling ${this.heckleOn ? 'on' : 'off'}`;
+      const toggles = [
+        this.settingsFile ? `H: heckling ${this.heckleOn ? 'on' : 'off'}` : '',
+        this.sound ? `S: sound ${this.soundOn ? 'on' : 'off'}` : '',
+      ].filter(Boolean);
+      if (toggles.length) {
+        const hint = toggles.join(' · ');
         area.text(GAME_WIDTH - hint.length, 18, hint, 'gray');
       }
     } else if (this.screen === 'results' && this.results) {

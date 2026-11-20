@@ -1,4 +1,5 @@
 import { App } from './core/app';
+import { createBeeper } from './core/beeper';
 import { parseKeys } from './core/keys';
 import { ENTER_ALT, LEAVE_ALT, renderDiff } from './core/render';
 import { EventWatcher, readRecentEvents, trimEvents } from './core/events';
@@ -18,7 +19,8 @@ if (!process.stdout.isTTY || !process.stdin.isTTY) {
 try { trimEvents(eventsFile()); } catch { /* ignore */ }
 const cfg = onlineConfig(process.env);
 const online = cfg ? new Online({ ...cfg, accountFile: accountFile(), outboxFile: outboxFile() }) : undefined;
-const app = new App({ games, scoresFile: scoresFile(), runsFile: runsFile(), nowMs: Date.now(), startGameId: process.argv[2], online, settingsFile: settingsFile() });
+const sound = createBeeper(process.platform, (s) => process.stdout.write(s));
+const app = new App({ games, scoresFile: scoresFile(), runsFile: runsFile(), nowMs: Date.now(), startGameId: process.argv[2], online, settingsFile: settingsFile(), sound });
 const watcher = new EventWatcher(eventsFile(), (ev) => app.onEvent(ev, Date.now()));
 watcher.start();
 try {
@@ -41,6 +43,7 @@ function shutdown(code: number, err?: unknown): void {
   if (err === undefined) try { app.quit(); } catch { /* ignore */ } // save the score of a run in progress (never after a crash)
   if (timer) clearInterval(timer);
   clearInterval(beatTimer);
+  sound.stop();
   clearAlive(aliveFile());
   watcher.stop();
   process.stdout.write(LEAVE_ALT);

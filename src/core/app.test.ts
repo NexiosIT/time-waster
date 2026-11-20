@@ -859,3 +859,66 @@ describe('heckling', () => {
     expect(has(rows(mk([fake('a', 'Alpha')], { settingsFile: settings() })), 'H: heckling on')).toBe(true);
   });
 });
+
+describe('arcade sounds', () => {
+  const settings = () => path.join(dir, 'settings.json');
+  const endless = () => fake('e', 'Endless', { isOver: () => false });
+  const playFor = (app: App, from: number, to: number) => { for (let t = from; t <= to; t += 100) app.tick(t); };
+  const port = () => {
+    const played: number[][][] = [];
+    let stops = 0;
+    return {
+      played, stops: () => stops,
+      play: (notes: readonly (readonly [number, number])[]) => { played.push(notes.map(n => [...n])); },
+      stop: () => { stops++; },
+    };
+  };
+
+  it('plays random sounds during a run, seconds apart', () => {
+    const sound = port();
+    const app = mk([endless()], { settingsFile: settings(), sound });
+    app.key('enter', 0);
+    playFor(app, 100, 60_000);
+    expect(sound.played.length).toBeGreaterThanOrEqual(4);
+    expect(sound.played.length).toBeLessThanOrEqual(15);
+  });
+
+  it('is silent in the menu and while paused', () => {
+    const sound = port();
+    const app = mk([endless()], { settingsFile: settings(), sound });
+    playFor(app, 100, 30_000);
+    expect(sound.played).toHaveLength(0);
+    app.key('enter', 30_000);
+    app.key('p', 30_000);
+    playFor(app, 30_100, 90_000);
+    expect(sound.played).toHaveLength(0);
+  });
+
+  it('S in the menu toggles sound, stops it, and remembers it next to heckling', () => {
+    const sound = port();
+    const app = mk([endless()], { settingsFile: settings(), sound });
+    expect(has(rows(app), 'H: heckling on · S: sound on')).toBe(true);
+    app.key('s', 0);
+    expect(has(rows(app), 'S: sound off')).toBe(true);
+    expect(sound.stops()).toBe(1);
+    expect(JSON.parse(fs.readFileSync(settings(), 'utf8'))).toEqual({ heckle: true, sound: false });
+    app.key('enter', 0);
+    playFor(app, 100, 60_000);
+    expect(sound.played).toHaveLength(0);
+    expect(has(rows(mk([endless()], { settingsFile: settings(), sound: port() })), 'S: sound off')).toBe(true);
+  });
+
+  it('toggling heckling keeps the sound choice', () => {
+    fs.writeFileSync(settings(), JSON.stringify({ heckle: true, sound: false }));
+    const app = mk([endless()], { settingsFile: settings(), sound: port() });
+    app.key('h', 0);
+    expect(JSON.parse(fs.readFileSync(settings(), 'utf8'))).toEqual({ heckle: false, sound: false });
+  });
+
+  it('without a sound port: no S hint and S does nothing', () => {
+    const app = mk([endless()], { settingsFile: settings() });
+    expect(has(rows(app), 'sound')).toBe(false);
+    app.key('s', 0);
+    expect(fs.existsSync(settings())).toBe(false);
+  });
+});

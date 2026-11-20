@@ -77,6 +77,7 @@ separate from `autoOpen`.
 | Menu    | Up / Down      | Select a game                                     |
 | Menu    | Enter          | Play                                              |
 | Menu    | H              | Heckling on / off (passive-aggressive pep talk)   |
+| Menu    | S              | Arcade sounds on / off                            |
 | Menu    | Q              | Quit the arcade                                   |
 | Menu    | O              | Share scores online / your online account (when online scores are on) |
 | In game | P              | Pause / resume                                    |
@@ -89,13 +90,20 @@ separate from `autoOpen`.
 
 All other keys go to the game; each game shows its own controls in the status line.
 
+### Arcade sounds
+
+While you play, a random arcade sound (coin, jump, laser, power-up, ...) beeps every
+4 to 12 seconds of play, never while paused. On Windows they are chiptune beeps played by a
+hidden PowerShell process; elsewhere the terminal bell rings. Press S in the menu to turn
+them off. The sounds live in `src/core/sounds.ts`.
+
 ## Where data lives
 
 Everything is under `%USERPROFILE%\.time-waster\`:
 
 - `scores.json` - your local high scores (top 10 per game)
 - `runs.json` - how long your finished runs took (last 20 per game); used for game lengths
-- `settings.json` - your settings (heckling on/off)
+- `settings.json` - your settings (heckling and sound on/off)
 - `events.jsonl` - recent Claude start / estimate / done / needs-you events written by the plugin hooks
 - `bin\arcade.cmd` - the `arcade` command shim
 - `arcade.alive` - heartbeat of an open arcade, so the plugin does not open a second one
