@@ -32,15 +32,15 @@ export function isBlocked(p: Point, pillars: Rect[]): boolean {
   return isWall(p) || pillars.some((r) => inRect(p, r));
 }
 
-const intersects = (a: Rect, b: Rect): boolean =>
+export const intersects = (a: Rect, b: Rect): boolean =>
   a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
 
-const grown = (r: Rect, n: number): Rect => ({ x: r.x - n, y: r.y - n, w: r.w + 2 * n, h: r.h + 2 * n });
+export const grown = (r: Rect, n: number): Rect => ({ x: r.x - n, y: r.y - n, w: r.w + 2 * n, h: r.h + 2 * n });
 
 const randInt = (ctx: GameContext, min: number, max: number): number =>
   min + Math.floor(ctx.random() * (max - min + 1));
 
-const PILLAR_SIZE = { w: [2, 4] as [number, number], h: [1, 2] as [number, number] };
+export const PILLAR_SIZE = { w: [2, 4] as [number, number], h: [1, 2] as [number, number] };
 
 /** Random rect 2 cells clear of the walls and of `existing`, never touching `avoid`; null if no spot found. */
 export function placeRect(

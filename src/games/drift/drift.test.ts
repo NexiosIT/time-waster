@@ -2,10 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { createRandom } from '../../core/random';
 import type { GameContext } from '../../core/types';
 import { clearanceFor, inRect, isBlocked, spawnCoin, type Point, type Rect } from './arena';
-import { MAX_OIL, MAX_PILLARS, WARN_TICKS } from './obstacles';
+import { MAX_OIL, MAX_PILLARS, SHUFFLE_TICKS, WARN_TICKS } from './obstacles';
 import { angleDiff, COINS_TO_MAX, GRIP_SLOW, headingAngle, speedForCoins, START_SPEED, TICK_MS } from './physics';
 import { hasEffect } from './effects';
-import { POWER_LIFE } from './powerups';
+import { POWER_LIFE, resolveMystery } from './powerups';
 import drift, { applyPower, cellOf, RAIN_COUNT, spawnAvoid, TRAIL_LEN, type DriftState } from './index';
 
 const ctx = (seed = 1): GameContext => ({ random: createRandom(seed), elapsedMs: 0 });
@@ -479,5 +479,53 @@ describe('drift growing arena', () => {
     const off = capture({ ...base, tick: 4 });
     expect(off).not.toContain('10,5,░,gray');
     expect(off).toContain('14,5,≈,blue');
+  });
+
+  describe('shuffle', () => {
+    const OLD: Rect = { x: 40, y: 10, w: 2, h: 1 };
+    const NEW: Rect = { x: 40, y: 3, w: 2, h: 1 };
+    const still = (s: DriftState): DriftState => ({ ...s, x: 6, y: 10, travel: 0, heading: 0 });
+
+    it('shuffle shows new layout for SHUFFLE_TICKS then swaps', () => {
+      let s = applyPower(open({ pillars: [OLD] }), 'shuffle', ctx());
+      expect(s.shuffle).not.toBeNull();
+      expect(s.shuffle!.ticksLeft).toBe(SHUFFLE_TICKS);
+      s = { ...s, shuffle: { pillars: [NEW], ticksLeft: SHUFFLE_TICKS } };
+      for (let i = 0; i < SHUFFLE_TICKS - 1; i++) {
+        s = drift.update(still(s), ctx());
+        expect(s.pillars).toEqual([OLD]);
+        expect(s.shuffle).not.toBeNull();
+      }
+      s = drift.update(still(s), ctx());
+      expect(s.shuffle).toBeNull();
+      expect(s.pillars).toEqual([NEW]);
+      expect(spawnAvoid({ ...s, shuffle: { pillars: [NEW], ticksLeft: 5 } })).toContainEqual(NEW);
+    });
+
+    it('old pillars stay solid and new ones are harmless while pending', () => {
+      const drive = (y: number, pillars: Rect[]): DriftState => {
+        let t = open({ x: 36, y, pillars, shuffle: { pillars: [NEW], ticksLeft: 25 } });
+        for (let i = 0; i < 20 && !t.crashed && t.x < 44; i++) t = drift.update(t, ctx());
+        return t;
+      };
+      expect(drive(10, [OLD]).crashed).toBe(true);
+      expect(drive(3, []).crashed).toBe(false);
+    });
+
+    it('mystery can resolve to shuffle', () => {
+      let seed = 1;
+      while (resolveMystery(ctx(seed)) !== 'shuffle') seed++;
+      const s = applyPower(open({ pillars: [OLD] }), 'mystery', ctx(seed));
+      expect(s.shuffle).not.toBeNull();
+    });
+
+    it('swap drops new pillars that clash with the car zone at swap time', () => {
+      const clash: Rect = { x: 31, y: 9, w: 2, h: 2 };
+      const s = drift.update(open({ pillars: [OLD], shuffle: { pillars: [clash, NEW], ticksLeft: 1 } }), ctx());
+      expect(s.pillars).not.toContainEqual(clash);
+      expect(s.pillars).toContainEqual(NEW);
+      expect(s.crashed).toBe(false);
+      expect(s.shuffle).toBeNull();
+    });
   });
 });

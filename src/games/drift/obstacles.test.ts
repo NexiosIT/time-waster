@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { createRandom } from '../../core/random';
 import type { GameContext } from '../../core/types';
-import type { Rect } from './arena';
-import { MAX_OIL, MAX_PILLARS, newObstacle, OIL_FROM, type Pending } from './obstacles';
+import { grown, intersects, type Rect } from './arena';
+import { MAX_OIL, MAX_PILLARS, newObstacle, OIL_FROM, shuffleLayout, type Pending } from './obstacles';
 
 const ctx = (seed = 1): GameContext => ({ random: createRandom(seed), elapsedMs: 0 });
 const none = { pillars: [] as Rect[], oil: [] as Rect[], pending: [] as Pending[], avoid: [] as Rect[] };
@@ -45,5 +45,29 @@ describe('newObstacle', () => {
 
   it('returns null when placement fails', () => {
     expect(newObstacle({ ...none, avoid: [{ x: 0, y: 0, w: 60, h: 20 }], coins: 0 }, ctx())).toBeNull();
+  });
+});
+
+describe('shuffleLayout', () => {
+  const old: Rect[] = [3, 10, 17, 24, 31, 38, 45].map((x) => ({ x, y: 4, w: 3, h: 2 }));
+  const avoid: Rect[] = [{ x: 1, y: 7, w: 20, h: 7 }];
+
+  it('shuffleLayout keeps the count and gaps, avoids the avoid rects', () => {
+    for (let seed = 1; seed <= 50; seed++) {
+      const out = shuffleLayout(old, avoid, ctx(seed));
+      expect(out).toHaveLength(7);
+      out.forEach((r, i) => {
+        expect(avoid.some((a) => intersects(r, a))).toBe(false);
+        out.slice(i + 1).forEach((q) => expect(intersects(grown(r, 2), q)).toBe(false));
+      });
+    }
+  });
+
+  it('shuffleLayout never exceeds the old count when space is tight', () => {
+    const tight: Rect[] = [{ x: 3, y: 3, w: 54, h: 14 }];
+    for (let seed = 1; seed <= 10; seed++) {
+      expect(shuffleLayout(old, tight, ctx(seed)).length).toBeLessThanOrEqual(old.length);
+    }
+    expect(shuffleLayout(old, [{ x: 0, y: 0, w: 60, h: 20 }], ctx(1)).length).toBeLessThanOrEqual(old.length);
   });
 });
