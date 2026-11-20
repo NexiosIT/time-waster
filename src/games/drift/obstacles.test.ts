@@ -71,3 +71,13 @@ describe('shuffleLayout', () => {
     expect(shuffleLayout(old, [{ x: 0, y: 0, w: 60, h: 20 }], ctx(1)).length).toBeLessThanOrEqual(old.length);
   });
 });
+
+describe('shuffle gap rules', () => {
+  it('newObstacle keeps the 2-cell gap to gapTo rects', () => {
+    const gapTo: Rect[] = [{ x: 28, y: 8, w: 3, h: 2 }];
+    for (let seed = 1; seed <= 100; seed++) {
+      const ob = newObstacle({ ...none, gapTo, coins: 0 }, ctx(seed))!;
+      expect(intersects(grown(ob.rect, 2), gapTo[0])).toBe(false);
+    }
+  });
+});

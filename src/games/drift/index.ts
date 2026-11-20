@@ -1,5 +1,5 @@
 import { GAME_HEIGHT, GAME_WIDTH, type Game, type GameContext, type Key, type Screen } from '../../core/types';
-import { carZone, generatePillars, inRect, intersects, isWall, pointRect, spawnCoin, START, type Point, type Rect } from './arena';
+import { carZone, generatePillars, grown, inRect, intersects, isWall, pointRect, spawnCoin, START, type Point, type Rect } from './arena';
 import {
   addEffect, DURATION, gripNow, hasEffect, modifiers, removeEffect, tickEffects, type Effect,
 } from './effects';
@@ -68,7 +68,8 @@ export function applyPower(state: DriftState, kind: PowerKind, ctx: GameContext)
     return outcome === 'slick' ? { ...state, effects: addEffect(state.effects, 'slick') } : applyPower(state, outcome, ctx);
   }
   if (kind === 'shuffle') {
-    const avoid = [...carZone(state.x, state.y, state.travel), ...spawnAvoid({ ...state, shuffle: null }), ...state.oil];
+    const avoid = [...carZone(state.x, state.y, state.travel), ...spawnAvoid({ ...state, shuffle: null }), ...state.oil,
+      ...[...state.oil, ...state.pending.map((p) => p.rect)].map((r) => grown(r, 2))];
     return { ...state, shuffle: { pillars: shuffleLayout(state.pillars, avoid, ctx), ticksLeft: SHUFFLE_TICKS } };
   }
   if (kind === 'rain' && !hasEffect(state.effects, 'rain')) {
@@ -130,7 +131,7 @@ function update(state: DriftState, ctx: GameContext): DriftState {
       st = { ...st, coin: spawnCoin(cell, st.pillars, ctx, { speed: speedForCoins(coins) * speedMul, avoid: spawnAvoid(st) }) };
       if (st.scheduleCoins % OBSTACLE_EVERY === 0) {
         const avoid = [...carZone(x, y, travel), ...spawnAvoid(st)];
-        const ob = newObstacle({ pillars: st.pillars, oil: st.oil, pending: st.pending, avoid, coins: st.coins }, ctx);
+        const ob = newObstacle({ pillars: st.pillars, oil: st.oil, pending: st.pending, avoid, coins: st.coins, gapTo: st.shuffle?.pillars }, ctx);
         if (ob) st = { ...st, pending: [...st.pending, ob] };
       }
     }
@@ -219,7 +220,11 @@ function draw(state: DriftState, screen: Screen): void {
 
   for (const r of state.oil) fillRect(screen, r, '≈', 'blue');
   if (Math.floor(state.tick / 4) % 2 === 0) {
-    for (const r of state.shuffle?.pillars ?? []) fillRect(screen, r, '░', 'magenta');
+    for (const r of state.shuffle?.pillars ?? []) {
+      for (let y = r.y; y < r.y + r.h; y++)
+        for (let x = r.x; x < r.x + r.w; x++)
+          if (!state.pillars.some((p) => inRect({ x, y }, p))) screen.put(x, y, '░', 'magenta');
+    }
     for (const p of state.pending) fillRect(screen, p.rect, p.kind === 'pillar' ? '░' : '≈', 'gray');
   }
 

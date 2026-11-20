@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createRandom } from '../../core/random';
 import type { GameContext } from '../../core/types';
-import { clearanceFor, inRect, isBlocked, spawnCoin, type Point, type Rect } from './arena';
+import { clearanceFor, grown, inRect, intersects, isBlocked, spawnCoin, type Point, type Rect } from './arena';
 import { MAX_OIL, MAX_PILLARS, SHUFFLE_TICKS, WARN_TICKS } from './obstacles';
 import { angleDiff, COINS_TO_MAX, GRIP_SLOW, headingAngle, speedForCoins, START_SPEED, TICK_MS } from './physics';
 import { hasEffect } from './effects';
@@ -510,6 +510,21 @@ describe('drift growing arena', () => {
       };
       expect(drive(10, [OLD]).crashed).toBe(true);
       expect(drive(3, []).crashed).toBe(false);
+    });
+
+    it('shuffled layout keeps a 2-cell gap to oil and pending rects', () => {
+      const oil: Rect = { x: 30, y: 12, w: 3, h: 1 };
+      const pend: Rect = { x: 40, y: 5, w: 3, h: 1 };
+      const olds: Rect[] = [8, 16, 24, 32, 44, 50].map((x) => ({ x, y: 15, w: 2, h: 1 }));
+      for (let seed = 1; seed <= 40; seed++) {
+        const s = applyPower(open({ pillars: olds, oil: [oil], pending: [{ kind: 'pillar', rect: pend, ticksLeft: 30 }] }), 'shuffle', ctx(seed));
+        for (const p of s.shuffle!.pillars) {
+          const kept = olds.some((q) => q === p);
+          if (kept) continue;
+          expect(intersects(grown(p, 2), oil)).toBe(false);
+          expect(intersects(grown(p, 2), pend)).toBe(false);
+        }
+      }
     });
 
     it('mystery can resolve to shuffle', () => {
