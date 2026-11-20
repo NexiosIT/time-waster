@@ -133,10 +133,23 @@ See [docs/adding-a-game.md](docs/adding-a-game.md). A game is one folder in
 ## The `dist/` rule
 
 The plugin is installed straight from git and there is no install step, so the built
-`dist/` folder (`arcade.js`, `signal.js`, `launch.js`) is committed **on `main` only**.
-Game and feature branches never commit `dist/` (run `npm run build` locally to play),
-which avoids merge conflicts. After merging to `main`, whoever merges runs
-`npm run build` and commits `dist/` on `main`.
+`dist/` folder (`arcade.js`, `signal.js`, `launch.js`) is committed, but only through
+a dedicated build PR. Game and feature branches never commit `dist/` (run
+`npm run build` locally to play), which avoids merge conflicts.
+
+`main` is protected, so `dist/` cannot be pushed to it directly. After merging a PR,
+whoever merged it updates `dist/` like this:
+
+```
+git switch main && git pull
+git switch -c build/dist-refresh
+npm run build
+git add dist && git commit -m "build: rebuild dist after #<PR>"
+git push -u origin build/dist-refresh
+```
+
+Then open a PR that changes only `dist/`, and merge it. Until it is merged, installed
+copies of the plugin run the previous build.
 
 ## Develop
 
