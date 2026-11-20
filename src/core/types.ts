@@ -15,6 +15,7 @@ export interface Game<S> {
   description: string;
   tickMs: number;
   controls: string;
+  maxScore?: number; // highest reachable score; the online leaderboard refuses anything above it (default 1_000_000)
   init(ctx: GameContext): S;
   onKey(state: S, key: Key): S;
   update(state: S, ctx: GameContext): S;

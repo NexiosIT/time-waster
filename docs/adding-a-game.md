@@ -44,6 +44,13 @@ interface Game<S> {
 }
 ```
 
+### `maxScore` (optional)
+
+A game may also set `maxScore: number`, the highest score a run can possibly reach. The
+online leaderboard refuses any submitted score above it, so set it to a true upper bound
+(worm uses `5220`: 29 x 18 cells x 10 points per dot). Leave it out and the server accepts
+scores up to `1_000_000`. It has no effect on local play or the local high-score file.
+
 `Key` is a normalised name: `up | down | left | right | space | enter | escape |
 backspace | tab`, or a single lowercase letter, digit or symbol (`'a'`, `'1'`, `'-'`).
 
