@@ -9,17 +9,32 @@ import {
   maxScoreFor,
 } from './limits';
 import { RateLimiter } from './ratelimit';
+import { knownGames, renderBoard, renderIndex, renderNotFound } from './pages';
 
 export type HandlerDeps = { db: Db; fetchFn: typeof fetch; now: () => Date; trustProxy: boolean };
 
-type Reply = { status: number; body?: unknown };
+/** `html` replies are pages; everything else is JSON. */
+type Reply = { status: number; body?: unknown; html?: string };
 class TooLarge extends Error {}
 
 const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
 const isObject = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v);
 
-function send(res: ServerResponse, { status, body }: Reply, extra: Record<string, string> = {}): void {
+const PAGE_HEADERS = {
+  'content-type': 'text/html; charset=utf-8',
+  // No scripts, no external anything: the pages are static HTML with inline styles.
+  'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+  'x-content-type-options': 'nosniff',
+  'referrer-policy': 'no-referrer',
+};
+
+function send(res: ServerResponse, { status, body, html }: Reply, extra: Record<string, string> = {}): void {
+  if (html !== undefined) {
+    res.writeHead(status, { ...PAGE_HEADERS, ...extra });
+    res.end(html);
+    return;
+  }
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', ...extra });
   res.end(body === undefined ? undefined : JSON.stringify(body));
 }
@@ -153,6 +168,15 @@ export function createHandler(deps: HandlerDeps): (req: IncomingMessage, res: Se
     const path = url.pathname;
     const method = req.method ?? 'GET';
     if (method === 'GET' && path === '/v1/health') return { status: 200, body: { ok: true } };
+    if (method === 'GET' && path === '/') {
+      const games = knownGames();
+      return { status: 200, html: renderIndex(games, games.length ? worldBests(db, games.map((g) => g.id)) : {}) };
+    }
+    if (method === 'GET' && path.startsWith('/games/')) {
+      const game = knownGames().find((g) => g.id === path.slice('/games/'.length));
+      if (!game) return { status: 404, html: renderNotFound() };
+      return { status: 200, html: renderBoard(game, board(db, game.id, BOARD_LIMIT).top) };
+    }
     if (method === 'POST' && path === '/v1/login') return login(req);
     if (method === 'POST' && path === '/v1/scores') return scores(req);
     if (method === 'GET' && path === '/v1/boards') {

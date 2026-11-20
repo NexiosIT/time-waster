@@ -35,6 +35,17 @@ touch the paths listed in the workflow (`server/`, `src/games/`, `src/core/types
 build the image without pushing it.
 Make the GHCR package public once (package settings, change visibility) so it can be pulled without credentials.
 
+## Leaderboard pages
+
+Besides the JSON API under `/v1`, the service serves plain HTML pages (no scripts, strict
+Content-Security-Policy):
+
+- `/` lists the games with their current leader
+- `/games/<game id>` shows that game's top 10, with a passive-aggressive line next to the
+  leader (from `LEADER` in `src/core/heckles.ts`; the same leader and score always get the same line)
+
+Only games bundled into the image are listed; blocked players are hidden like everywhere else.
+
 ## Admin
 
 Logins are matched case-insensitively. A login that matches more than one player is refused.
