@@ -1,6 +1,7 @@
 import { CellBuffer } from './buffer';
 import { Banner } from './banner';
 import { GameSession } from './session';
+import { addRun } from './runs';
 import { addScore, loadScores } from './scores';
 import type { ScoreEntry } from './scores';
 import type { ClaudeEvent } from './events';
@@ -10,6 +11,7 @@ import type { Color, Game, GameLength, Key } from './types';
 export interface AppOptions {
   games: Game<any>[];
   scoresFile: string;
+  runsFile?: string;
   nowMs: number;
   seed?: number;
   startGameId?: string;
@@ -31,6 +33,7 @@ const MENU_HINTS = '↑↓ select · Enter play · Q quit';
 export class App {
   private games: Game<any>[];
   private scoresFile: string;
+  private runsFile?: string;
   private seed: number;
   private runs = 0;
   private banner = new Banner();
@@ -53,6 +56,7 @@ export class App {
     }
     this.games = ok.sort((a, b) => a.title.localeCompare(b.title));
     this.scoresFile = opts.scoresFile;
+    this.runsFile = opts.runsFile;
     this.seed = opts.seed ?? Date.now();
     this.refreshBest();
     const start = opts.startGameId ? this.games.find((g) => g.id === opts.startGameId) : undefined;
@@ -170,7 +174,17 @@ export class App {
       this.screen = 'crashed';
     } else if (s.status === 'over') {
       this.banner.clearMarker();
+      if (!s.endedEarly) this.recordRun(this.game!.id, s.playedMs);
       this.finish(s.score);
+    }
+  }
+
+  private recordRun(id: string, ms: number): void {
+    if (!this.runsFile) return;
+    try {
+      addRun(this.runsFile, id, ms);
+    } catch {
+      // history is best-effort; never break the results screen
     }
   }
 

@@ -4,6 +4,7 @@ import os from 'node:os';
 import * as path from 'node:path';
 import { App } from './app';
 import { loadScores } from './scores';
+import { loadRuns } from './runs';
 import type { Game } from './types';
 
 function fake(id: string, title: string, over: Partial<Game<number>> = {}): Game<number> {
@@ -32,6 +33,34 @@ const mk = (games: Game<any>[], extra = {}) => new App({ games, scoresFile: file
 function play(app: App, from = 100, to = 1000) { for (let t = from; t <= to; t += 100) app.tick(t); }
 
 describe('App', () => {
+  describe('run recording', () => {
+    it('records a natural end with the played time', () => {
+      const rf = path.join(dir, 'runs.json');
+      const app = mk([fake('a', 'Alpha')], { runsFile: rf });
+      app.key('enter', 0);
+      play(app, 100, 300);
+      expect(loadRuns(rf).a.map((e) => e.ms)).toEqual([300]);
+    });
+
+    it('records nothing for Esc, quit() or a crash', () => {
+      const rf = path.join(dir, 'runs.json');
+      const a = mk([fake('a', 'Alpha')], { runsFile: rf });
+      a.key('enter', 0); a.tick(100); a.key('escape', 100);
+      const b = mk([fake('a', 'Alpha')], { runsFile: rf });
+      b.key('enter', 0); b.tick(100); b.quit();
+      const c = mk([fake('a', 'Alpha', { update: () => { throw new Error('boom'); } })], { runsFile: rf });
+      c.key('enter', 0); c.tick(100);
+      expect(loadRuns(rf)).toEqual({});
+    });
+
+    it('still shows results when runsFile is unwritable', () => {
+      const app = mk([fake('a', 'Alpha')], { runsFile: dir });
+      app.key('enter', 0);
+      play(app, 100, 300);
+      expect(has(rows(app), 'Alpha — Score 3')).toBe(true);
+    });
+  });
+
   it('menu lists titles alphabetically, hides invalid and duplicate ids', () => {
     const app = mk([fake('b', 'Beta'), fake('a', 'Alpha'), fake('Bad Id', 'Zed'), fake('a', 'Dup')]);
     const r = rows(app);

@@ -2,7 +2,7 @@ import { App } from './core/app';
 import { parseKeys } from './core/keys';
 import { ENTER_ALT, LEAVE_ALT, renderDiff } from './core/render';
 import { EventWatcher, trimEvents } from './core/events';
-import { aliveFile, eventsFile, scoresFile } from './core/paths';
+import { aliveFile, eventsFile, runsFile, scoresFile } from './core/paths';
 import { BEAT_MS, clearAlive, touchAlive } from './core/alive';
 import type { CellBuffer } from './core/buffer';
 import { games } from './games/registry.generated';
@@ -13,7 +13,7 @@ if (!process.stdout.isTTY || !process.stdin.isTTY) {
 }
 
 try { trimEvents(eventsFile()); } catch { /* ignore */ }
-const app = new App({ games, scoresFile: scoresFile(), nowMs: Date.now(), startGameId: process.argv[2] });
+const app = new App({ games, scoresFile: scoresFile(), runsFile: runsFile(), nowMs: Date.now(), startGameId: process.argv[2] });
 const watcher = new EventWatcher(eventsFile(), (ev) => app.onEvent(ev, Date.now()));
 watcher.start();
 
