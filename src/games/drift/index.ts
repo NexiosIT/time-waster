@@ -1,10 +1,17 @@
 import { GAME_HEIGHT, GAME_WIDTH, type Game, type GameContext, type Key, type Screen } from '../../core/types';
-import { generatePillars, isBlocked, spawnCoin, START, type Point, type Rect } from './arena';
+import { generatePillars, isBlocked, pointRect, spawnCoin, START, type Point, type Rect } from './arena';
 import {
-  gripFor, headingAngle, isDrifting, rotateHeading, speedForCoins, TICK_MS, turnToward,
+  addEffect, DURATION, gripNow, modifiers, tickEffects, type Effect,
+} from './effects';
+import {
+  headingAngle, isDrifting, rotateHeading, speedForCoins, TICK_MS, turnToward,
 } from './physics';
+import {
+  nextPowerGap, pickPower, POWER_BLINK, POWER_LIFE, POWER_LOOK, resolveMystery, type PowerKind, type PowerUp,
+} from './powerups';
 
 export const TRAIL_LEN = 6;
+const BASE_COIN = 10;
 
 export interface DriftState {
   x: number; y: number;      // float position, in cells
@@ -16,6 +23,12 @@ export interface DriftState {
   pillars: Rect[];
   trail: Point[];            // most recent cell first, at most TRAIL_LEN, no consecutive duplicates
   crashed: boolean;
+  points: number;            // score
+  scheduleCoins: number;     // coins that drive schedules (Coin rain extras excluded)
+  nextPowerAt: number | null; // scheduleCoins at which the next power-up spawns; null while one is on the floor
+  powerUp: PowerUp | null;
+  effects: Effect[];
+  tick: number;              // +1 per update, used for blinking
 }
 
 const CAR = ['→', '↘', '↓', '↙', '←', '↖', '↑', '↗'];
@@ -31,6 +44,7 @@ function init(ctx: GameContext): DriftState {
   return {
     x: START.x, y: START.y, heading: 0, travel: 0, lastTurn: 1, coins: 0,
     coin: spawnCoin(START, pillars, ctx), pillars, trail: [], crashed: false,
+    points: 0, scheduleCoins: 0, nextPowerAt: nextPowerGap(ctx), powerUp: null, effects: [], tick: 0,
   };
 }
 
@@ -41,28 +55,84 @@ function onKey(state: DriftState, key: Key): DriftState {
   return state;
 }
 
+/** Applies a collected power-up. Rain and shield only add their timer for now; shuffle does nothing yet. */
+export function applyPower(state: DriftState, kind: PowerKind, ctx: GameContext): DriftState {
+  if (kind === 'mystery') {
+    const outcome = resolveMystery(ctx);
+    return outcome === 'slick' ? { ...state, effects: addEffect(state.effects, 'slick') } : applyPower(state, outcome, ctx);
+  }
+  if (kind === 'shuffle') return state;
+  return { ...state, effects: addEffect(state.effects, kind) };
+}
+
+/** Cells a new coin or power-up must not land on. */
+export function spawnAvoid(state: DriftState): Rect[] {
+  const rects = [pointRect(state.coin)];
+  if (state.powerUp) rects.push(pointRect(state.powerUp.at));
+  return rects;
+}
+
 function update(state: DriftState, ctx: GameContext): DriftState {
   if (state.crashed) return state;
-  const speed = speedForCoins(state.coins);
-  const travel = turnToward(state.travel, headingAngle(state.heading), gripFor(speed), state.lastTurn);
+  let st: DriftState = { ...state, effects: tickEffects(state.effects) };
+  const speed = speedForCoins(st.coins) * modifiers(st.effects).speedMul;
+  const travel = turnToward(st.travel, headingAngle(st.heading), gripNow(speed, st.effects, false), st.lastTurn);
   const dx = Math.cos(travel) * speed * TICK_MS / 1000;
   const dy = Math.sin(travel) * speed * TICK_MS / 1000 * 0.5;
   const n = Math.max(1, Math.ceil(Math.max(Math.abs(dx), Math.abs(dy))));
 
-  let { x, y, coins, coin, trail } = state;
+  let { x, y } = st;
   let crashed = false;
   for (let i = 0; i < n; i++) {
     x += dx / n;
     y += dy / n;
     const cell = cellOf({ x, y });
-    if (isBlocked(cell, state.pillars)) { crashed = true; break; }
-    if (samePoint(cell, coin)) {
-      coins += 1;
-      coin = spawnCoin(cell, state.pillars, ctx, { speed: speedForCoins(coins) });
+    if (isBlocked(cell, st.pillars)) { crashed = true; break; }
+    if (samePoint(cell, st.coin)) {
+      const { speedMul, coinMul } = modifiers(st.effects);
+      const coins = st.coins + 1;
+      st = { ...st, coins, scheduleCoins: st.scheduleCoins + 1, points: st.points + BASE_COIN * coinMul };
+      st = { ...st, coin: spawnCoin(cell, st.pillars, ctx, { speed: speedForCoins(coins) * speedMul, avoid: spawnAvoid(st) }) };
     }
-    if (trail.length === 0 || !samePoint(trail[0], cell)) trail = [cell, ...trail].slice(0, TRAIL_LEN);
+    if (st.powerUp && samePoint(cell, st.powerUp.at)) {
+      st = applyPower(st, st.powerUp.kind, ctx);
+      st = { ...st, powerUp: null, nextPowerAt: st.scheduleCoins + nextPowerGap(ctx) };
+    }
+    if (st.trail.length === 0 || !samePoint(st.trail[0], cell)) {
+      st = { ...st, trail: [cell, ...st.trail].slice(0, TRAIL_LEN) };
+    }
   }
-  return { ...state, x, y, travel, coins, coin, trail, crashed };
+  st = { ...st, x, y, travel, crashed };
+
+  if (st.powerUp) {
+    const ticksLeft = st.powerUp.ticksLeft - 1;
+    st = ticksLeft > 0
+      ? { ...st, powerUp: { ...st.powerUp, ticksLeft } }
+      : { ...st, powerUp: null, nextPowerAt: st.scheduleCoins + nextPowerGap(ctx) };
+  }
+  if (st.powerUp === null && st.nextPowerAt !== null && st.scheduleCoins >= st.nextPowerAt) {
+    const spawnSpeed = speedForCoins(st.coins) * modifiers(st.effects).speedMul;
+    const at = spawnCoin(cellOf(st), st.pillars, ctx, { speed: spawnSpeed, avoid: spawnAvoid(st) });
+    st = { ...st, powerUp: { kind: pickPower(ctx), at, ticksLeft: POWER_LIFE }, nextPowerAt: null };
+  }
+  return { ...st, tick: st.tick + 1 };
+}
+
+const READOUT_MAX_X = 57;
+
+function drawReadout(effects: Effect[], screen: Screen): void {
+  const LABEL: Record<Effect['kind'], string> =
+    { double: '×2', grip: 'G', rain: '$', nitro: 'N', shield: 'S', slick: 'SLICK' };
+  let x = 2;
+  for (const e of effects) {
+    const color = e.kind === 'slick' ? 'brightRed' :POWER_LOOK[e.kind].color;
+    const filled = Math.ceil(4 * e.ticksLeft / DURATION[e.kind]);
+    const text = `${LABEL[e.kind]} ${'█'.repeat(filled)}${'░'.repeat(4 - filled)} `;
+    for (const ch of text) {
+      if (x > READOUT_MAX_X) return;
+      screen.put(x++, 0, ch, color);
+    }
+  }
 }
 
 function draw(state: DriftState, screen: Screen): void {
@@ -82,6 +152,11 @@ function draw(state: DriftState, screen: Screen): void {
     for (const t of state.trail) if (!samePoint(t, car)) screen.put(t.x, t.y, '·', 'gray');
   }
   screen.put(state.coin.x, state.coin.y, '●', 'yellow');
+  const p = state.powerUp;
+  if (p && (p.ticksLeft > POWER_BLINK || Math.floor(state.tick / 4) % 2 === 0)) {
+    screen.put(p.at.x, p.at.y, POWER_LOOK[p.kind].ch, POWER_LOOK[p.kind].color);
+  }
+  drawReadout(state.effects, screen);
   screen.put(car.x, car.y, CAR[state.heading], state.crashed ? 'red' : 'brightCyan');
 }
 
@@ -95,7 +170,7 @@ const drift: Game<DriftState> = {
   onKey,
   update,
   draw,
-  score: s => s.coins * 10,
+  score: s => s.points,
   isOver: s => s.crashed,
 };
 

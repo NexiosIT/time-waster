@@ -3,6 +3,9 @@ import { createRandom } from '../../core/random';
 import type { GameContext } from '../../core/types';
 import { clearanceFor, isBlocked, type Point } from './arena';
 import { angleDiff, COINS_TO_MAX, headingAngle, speedForCoins, START_SPEED, TICK_MS } from './physics';
+import { hasEffect } from './effects';
+import { GRIP_SLOW } from './physics';
+import { POWER_LIFE } from './powerups';
 import drift, { cellOf, TRAIL_LEN, type DriftState } from './index';
 
 const ctx = (seed = 1): GameContext => ({ random: createRandom(seed), elapsedMs: 0 });
@@ -155,6 +158,93 @@ describe('drift', () => {
     const s = drift.update(open({ x: 58.6, coin: { x: 59, y: 10 } }), ctx());
     expect(s.crashed).toBe(true);
     expect(s.coins).toBe(0);
+  });
+
+  describe('power-ups', () => {
+    const ahead = { coin: { x: 31, y: 10 }, x: 30.6 };
+
+    it('coin gives 10 points; double gives 20; double+nitro gives 60', () => {
+      const pts = (effects: DriftState['effects']) => drift.score(drift.update(open({ ...ahead, effects }), ctx()));
+      expect(pts([])).toBe(10);
+      expect(pts([{ kind: 'double', ticksLeft: 50 }])).toBe(20);
+      expect(pts([{ kind: 'double', ticksLeft: 50 }, { kind: 'nitro', ticksLeft: 50 }])).toBe(60);
+    });
+
+    it('power-up spawns once scheduleCoins reaches nextPowerAt, on a legal non-avoided cell', () => {
+      const s = drift.update(open({ nextPowerAt: 0 }), ctx());
+      expect(s.powerUp).not.toBeNull();
+      expect(s.nextPowerAt).toBeNull();
+      expect(s.powerUp!.ticksLeft).toBe(POWER_LIFE);
+      expect(isBlocked(s.powerUp!.at, s.pillars)).toBe(false);
+      expect(s.powerUp!.at).not.toEqual(s.coin);
+    });
+
+    it('does not spawn before the threshold', () => {
+      const s = drift.update(open({ nextPowerAt: 3, scheduleCoins: 2 }), ctx());
+      expect(s.powerUp).toBeNull();
+    });
+
+    it('power-up expires after POWER_LIFE ticks and reschedules', () => {
+      const c = ctx();
+      const hold = (s: DriftState): DriftState => ({ ...s, x: 5, y: 5, travel: 0 });
+      let s = hold(open({ nextPowerAt: null, powerUp: { kind: 'double', at: { x: 2, y: 18 }, ticksLeft: POWER_LIFE } }));
+      for (let i = 0; i < POWER_LIFE - 1; i++) s = drift.update(hold(s), c);
+      expect(s.powerUp).not.toBeNull();
+      s = drift.update(hold(s), c);
+      expect(s.powerUp).toBeNull();
+      expect([3, 4]).toContain(s.nextPowerAt! - s.scheduleCoins);
+    });
+
+    it('driving through a power-up applies it and reschedules', () => {
+      const s = drift.update(
+        open({ x: 30.6, nextPowerAt: null, powerUp: { kind: 'double', at: { x: 31, y: 10 }, ticksLeft: 100 } }), ctx());
+      expect(hasEffect(s.effects, 'double')).toBe(true);
+      expect(s.powerUp).toBeNull();
+      expect([3, 4]).toContain(s.nextPowerAt! - s.scheduleCoins);
+    });
+
+    it('nitro moves 1.5x as far per tick', () => {
+      const plain = drift.update(open(), ctx());
+      const nitro = drift.update(open({ effects: [{ kind: 'nitro', ticksLeft: 100 }] }), ctx());
+      expect(nitro.x - 30).toBeCloseTo((plain.x - 30) * 1.5);
+    });
+
+    it('grip effect turns at GRIP_SLOW at max speed', () => {
+      const s0 = open({ coins: 20, heading: 2, travel: 0, x: 20, y: 4, effects: [{ kind: 'grip', ticksLeft: 100 }] });
+      const before = Math.abs(angleDiff(s0.travel, headingAngle(s0.heading)));
+      const s = drift.update(s0, ctx());
+      const after = Math.abs(angleDiff(s.travel, headingAngle(s.heading)));
+      expect(before - after).toBeCloseTo(GRIP_SLOW);
+    });
+
+    it('nitro at max speed cannot tunnel through a 1-row pillar', () => {
+      const c = ctx();
+      let s = open({
+        x: 16, y: 10, coins: 20, heading: 1, travel: Math.PI / 4, pillars: [{ x: 17, y: 12, w: 8, h: 1 }],
+        effects: [{ kind: 'nitro', ticksLeft: 100 }],
+      });
+      for (let i = 0; i < 100 && !s.crashed && s.x <= 30; i++) s = drift.update(s, c);
+      expect(s.crashed).toBe(true);
+    });
+
+    it('crash wins over a power-up in the same cell', () => {
+      const s = drift.update(
+        open({ x: 58.6, nextPowerAt: null, powerUp: { kind: 'double', at: { x: 59, y: 10 }, ticksLeft: 100 } }), ctx());
+      expect(s.crashed).toBe(true);
+      expect(hasEffect(s.effects, 'double')).toBe(false);
+    });
+
+    it('readout shows active effects on the top border', () => {
+      const calls = capture(open({ effects: [{ kind: 'double', ticksLeft: 200 }] }));
+      expect(calls.some((l) => l.startsWith('2,0,×,'))).toBe(true);
+    });
+
+    it('power-up glyph blinks in its last ticks', () => {
+      const p = { kind: 'nitro' as const, at: { x: 20, y: 5 }, ticksLeft: 10 };
+      const shown = (tick: number) => capture(open({ powerUp: p, tick })).includes('20,5,N,brightRed');
+      expect(shown(0)).toBe(true);
+      expect(shown(4)).toBe(false);
+    });
   });
 
   it('is a no-op once crashed', () => {
