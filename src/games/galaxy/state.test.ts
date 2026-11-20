@@ -220,6 +220,13 @@ describe('galaxy step', () => {
     expect(m.enemyShots).toEqual([{ x: e1.x + 1, y: e1.y + 1 }]);
   });
 
+  it('does not fire when the shot would spawn at or below the debris row', () => {
+    const low = { ...initState(), fy: DEBRIS_Y - 1 - (ROWS - 1), marchIn: 99 };
+    expect(step(low, always).enemyShots).toEqual([]);
+    const ok = { ...initState(), fy: DEBRIS_Y - 2 - (ROWS - 1), marchIn: 99 };
+    expect(step(ok, always).enemyShots).toHaveLength(1);
+  });
+
   it('picks among alive columns only', () => {
     const s = { ...initState(), alive: only([[0, 2], [1, 5]]), marchIn: 99 };
     // 2 alive columns; 0.6 * 2 → index 1 → column 5.

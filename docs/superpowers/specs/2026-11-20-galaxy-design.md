@@ -1,7 +1,7 @@
 # Galaxy: design
 
 Date: 2026-11-20
-Status: draft, awaiting approval
+Status: approved
 Builds on: `docs/adding-a-game.md`, `2026-11-20-sized-games-design.md`
 
 ## Intent

@@ -165,6 +165,8 @@ function enemyFire(s: GalaxyState, random: () => number): GalaxyState {
   let r = ROWS - 1;
   while (!s.alive[r][c]) r--;
   const e = enemyAt(s, r, c);
+  // Too low: the shot would reach the ship faster than a human can react.
+  if (e.y + 1 >= DEBRIS_Y) return s;
   return { ...s, enemyShots: [...s.enemyShots, { x: e.x + 1, y: e.y + 1 }] };
 }
 

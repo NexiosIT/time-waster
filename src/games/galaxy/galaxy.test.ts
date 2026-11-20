@@ -4,7 +4,7 @@ import { CellBuffer } from '../../core/buffer';
 import type { Color, Screen } from '../../core/types';
 import game, { MAX_SCORE } from './index';
 import { drawState } from './draw';
-import { initState, COLS, POINTS, WAVE_BONUS, LIVES, CLEAR_BONUS } from './state';
+import { initState, enemyAt, ROWS, COLS, POINTS, WAVE_BONUS, LIVES, CLEAR_BONUS } from './state';
 import type { GalaxyState } from './state';
 
 const ctx = { random: createRandom(1), elapsedMs: 0 };
@@ -49,6 +49,44 @@ describe('galaxy contract', () => {
         5 * WAVE_BONUS * LIVES +
         CLEAR_BONUS,
     );
+  });
+
+  it('a perfect run reaches MAX_SCORE with 3 lives and the GALAXY CLEARED banner', () => {
+    const quiet = { random: () => 0.99, elapsedMs: 0 };
+    let s = game.init(quiet);
+    let ticks = 0;
+    let bannerText = '';
+    while (!game.isOver(s) && ticks++ < 200_000) {
+      if (s.banner === 0) {
+        let target: { x: number; y: number } | null = null;
+        for (let r = ROWS - 1; r >= 0 && !target; r--) {
+          for (let c = 0; c < COLS; c++) {
+            if (s.alive[r][c]) {
+              const e = enemyAt(s, r, c);
+              if (!target || Math.abs(e.x + 1 - (s.shipX + 1)) < Math.abs(target.x + 1 - (s.shipX + 1))) target = e;
+            }
+          }
+        }
+        if (target) {
+          const dx = target.x - s.shipX;
+          if (dx <= -2) s = game.onKey(s, 'left');
+          else if (dx >= 2) s = game.onKey(s, 'right');
+          else s = game.onKey(s, 'space');
+        }
+      }
+      s = game.update(s, quiet);
+      if (s.banner > 0 && !bannerText) {
+        const b = render(s);
+        for (let x = 0; x < 60; x++) bannerText += b.get(x, 9).ch;
+      }
+    }
+    expect(game.isOver(s)).toBe(true);
+    expect(s.score).toBe(MAX_SCORE);
+    expect(s.lives).toBe(3);
+    expect(s.wave).toBe(5);
+    expect(s.alive.flat().some(Boolean)).toBe(false);
+    expect(s.banner).toBe(0);
+    expect(bannerText).toContain('GALAXY CLEARED');
   });
 
   it('starts at 0, survives updates and does not mutate', () => {
