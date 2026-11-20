@@ -11,7 +11,7 @@ if (!process.stdout.isTTY || !process.stdin.isTTY) {
   process.exit(1);
 }
 
-trimEvents(eventsFile());
+try { trimEvents(eventsFile()); } catch { /* ignore */ }
 const app = new App({ games, scoresFile: scoresFile(), nowMs: Date.now(), startGameId: process.argv[2] });
 const watcher = new EventWatcher(eventsFile(), (ev) => app.onEvent(ev, Date.now()));
 watcher.start();
@@ -50,6 +50,7 @@ timer = setInterval(() => {
   const now = Date.now();
   app.tick(now);
   const buf = app.render(process.stdout.columns || 80, process.stdout.rows || 24, now);
-  process.stdout.write(renderDiff(prev, buf));
+  const out = renderDiff(prev, buf);
+  if (out) process.stdout.write(out);
   prev = buf;
 }, 16);

@@ -85,8 +85,8 @@ describe('App', () => {
     play(app);
     app.key('enter', 1000);
     expect(has(rows(app), 'n=0')).toBe(true);
-    app.key('escape', 1000); // ends the second run (score 0), saved
-    app.key('escape', 1000); // results -> menu
+    app.key('escape', 1000); // ends the second run (score 0), saved, back to menu
+    expect(has(rows(app), 'ARCADE')).toBe(true);
     expect(has(rows(app), 'Best 3')).toBe(true);
     expect(loadScores(file).a).toHaveLength(2);
   });
@@ -114,6 +114,7 @@ describe('App', () => {
     play(app, 100, 200);
     app.key('escape', 200);
     expect(loadScores(file).a[0].score).toBe(2);
+    expect(has(rows(app), 'ARCADE')).toBe(true);
   });
 
   it('a store failure shows Couldn\'t save score and does not throw', () => {
@@ -153,5 +154,44 @@ describe('App', () => {
     expect(r.filter((l) => l.trim()).length).toBe(1);
     play(app, 100, 1000);
     expect(has(rows(app), 'n=0')).toBe(true);
+  });
+
+  it('sanitises control characters in crash text', () => {
+    const msg = ['a', 'b' + String.fromCharCode(27) + '[2Jc'].join(String.fromCharCode(10));
+    const app = mk([fake('a', 'Alpha', { update: () => { throw new Error(msg); } })]);
+    app.key('enter', 0);
+    play(app);
+    const r = rows(app);
+    expect(has(r, 'Alpha crashed: a b [2Jc')).toBe(true);
+    expect(r.join('').includes(String.fromCharCode(27))).toBe(false);
+  });
+
+  it('drops game keys while too small', () => {
+    let keys = 0;
+    const app = mk([fake('a', 'Alpha', { onKey: (s) => { keys++; return s; } })]);
+    app.key('enter', 0);
+    rows(app, 50, 20);
+    app.key('left', 0);
+    expect(keys).toBe(0);
+    rows(app);
+    app.key('left', 0);
+    expect(keys).toBe(1);
+  });
+
+  it('ctrl-c quits from results and crash screens', () => {
+    const a = mk([fake('a', 'Alpha')]);
+    a.key('enter', 0); play(a);
+    expect(a.key('ctrl-c', 0)).toBe('quit');
+    const b = mk([fake('a', 'Alpha', { update: () => { throw new Error('x'); } })]);
+    b.key('enter', 0); play(b);
+    expect(b.key('ctrl-c', 0)).toBe('quit');
+  });
+
+  it('marker is cleared after Esc ends the run', () => {
+    const app = mk([fake('a', 'Alpha')]);
+    app.key('enter', 0);
+    app.onEvent({ type: 'done', at: '', project: '' }, 0);
+    app.key('escape', 100);
+    expect(rows(app, 80, 30, 20_000)[29]).not.toContain('Claude');
   });
 });

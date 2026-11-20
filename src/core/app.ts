@@ -40,6 +40,7 @@ export class App {
   private session: GameSession<any> | null = null;
   private results: Results | null = null;
   private crash = '';
+  private tooSmall = false;
   private best = new Map<string, number>();
 
   constructor(opts: AppOptions) {
@@ -68,8 +69,13 @@ export class App {
         else if (k === 'enter' && this.games[this.sel]) this.start(this.games[this.sel], nowMs);
         break;
       case 'playing':
+        if (this.tooSmall && k !== 'p' && k !== 'escape') break;
         this.session!.key(k);
-        this.afterRun();
+        if (k === 'escape' && this.session!.status === 'over') {
+          this.banner.clearMarker();
+          this.finish(this.session!.score);
+          this.toMenu();
+        } else this.afterRun();
         break;
       case 'results':
         if (k === 'enter' && this.game) this.start(this.game, nowMs);
@@ -94,6 +100,7 @@ export class App {
   render(cols: number, rows: number, nowMs: number): CellBuffer {
     const buf = new CellBuffer(cols, rows);
     const tooSmall = cols < MIN_COLS || rows < MIN_ROWS;
+    this.tooSmall = tooSmall;
     if (this.screen === 'playing') this.session!.setTooSmall(tooSmall);
     if (tooSmall) {
       buf.text(Math.max(0, Math.floor((cols - TOO_SMALL.length) / 2)), Math.floor(rows / 2), TOO_SMALL, 'brightYellow');
@@ -147,7 +154,7 @@ export class App {
     if (this.screen !== 'playing' || !s) return;
     if (s.status === 'crashed') {
       this.banner.clearMarker();
-      this.crash = `${this.game!.title} crashed: ${s.error ?? 'unknown error'}`;
+      this.crash = `${this.game!.title} crashed: ${(s.error ?? 'unknown error').replace(/\p{Cc}+/gu, ' ')}`;
       this.session = null;
       this.screen = 'crashed';
     } else if (s.status === 'over') {
