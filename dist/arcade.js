@@ -531,78 +531,100 @@ function drawWorld(area, view, signedIn) {
 }
 
 // src/core/heckles.ts
+var START = [
+  "Oh good, {game} again. Let's see how you fuck this one up.",
+  "New run. Same hands, I assume.",
+  "Go on then. Impress me. I'll wait.",
+  "Another run? Hell, why not. Claude's doing your job anyway.",
+  "Here we go again. Try not to embarrass us both.",
+  "Damn, you're really doing this. Okay.",
+  "Fresh start. Don't piss it away like the last one.",
+  "Let's go. Or, you know, let's sort of go."
+];
 var BEHIND = [
-  "{time} in and you're at {score}. Your best is {best}. Just saying.",
+  "{time} in and at {score}? Best is {best}. What the fuck?",
   "Your best was {best}. This run is... a run.",
   "{score}? Bold strategy. Let's see if it pays off.",
-  "At this pace you'll beat {best} sometime next year.",
+  "At this pace you'll beat {best} next fucking year.",
   "Remember when you scored {best}? Me too. Good times.",
   "Damn. {score}. Is the keyboard upside down?",
-  "Not to compare, but past you would be crushing this.",
+  "Not to compare, but past you is kicking your ass.",
   "{score} after {time}. I'm not mad, just disappointed.",
-  "This is fine. Everything is fine. ({score} vs {best})",
+  "This is fine. Everything is fine. Holy shit.",
   "Hell of a warm-up. When does the real run start?"
+];
+var AHEAD = [
+  "Ahead of your best. Don't fuck it up now.",
+  "{score} already? Who are you and where is the usual you?",
+  "Okay, that's actually decent. Shit, I'm not used to this.",
+  "Look at you, beating {best} pace. Enjoy it while it lasts.",
+  "Ahead of schedule. Statistically, the choke is coming.",
+  "Damn, okay. Keep this up and I'll need new material.",
+  "On pace for a record. No pressure. Well, all the pressure.",
+  "Holy crap, you can actually play. Too bad about your job."
 ];
 var STUCK = [
   "Are you playing or just admiring the graphics?",
-  "{time} without a single point. Impressive, in a way.",
+  "{time} without a point. Fucked up, but impressive.",
   "Still {score}. The score won't go up by staring at it.",
   "Did Claude finish and you forgot to blink?",
   "Shit happens. So could points, any minute now.",
   "Fun fact: points are allowed. Encouraged, even.",
-  "Take your time. Claude is only doing all your actual work.",
+  "Take your damn time. Claude does the real work anyway.",
   "Crap, did it freeze? Oh no, that's just you."
 ];
 var NO_BEST = [
-  "First time? It shows.",
-  "{game}: easy to learn, apparently hard to master.",
+  "First time? It fucking shows.",
+  "{game}: easy to learn, hard as hell to master.",
   "No pressure. Well, some pressure.",
   "You're doing great. For a beginner. At {game}.",
   "Hell, everyone starts somewhere. Here, apparently.",
   "Interesting technique. Very... unique.",
   "Keep going. Statistically you have to get better.",
-  "Damn, {score} already. Wait, is that good? Who knows."
+  "Damn, {score} already. Is that good? Who the fuck knows."
 ];
 var RUN_WORSE = [
   "{score}. Your best is {best}. Cool cool cool.",
   "{score}. Bold of you to stop there.",
-  "Well, that happened. {score}, for the record.",
+  "Well, that was a pile of shit. {score}, for the record.",
   "{best} was your best. {score} was... also a number.",
   "Damn, so close to {best}. Not really, but still.",
   "{score}. Maybe Claude should play next time.",
   "Shit. Well. There's always another run.",
-  "{score}. I'll pretend I didn't see that."
+  "{score}. What the hell was that?"
 ];
 var RUN_BEST = [
   "New best: {score}. Took you long enough.",
   "{score}! Don't let it go to your head.",
   "New best. Even a broken clock, you know.",
-  "Finally. {score}. Was that so hard?",
+  "Finally. {score}. Was that so fucking hard?",
   "Hell yes, {score}. Now do it again, I dare you.",
-  "New best. Enjoy it, it won't last."
+  "Holy shit, a new best. Screenshot it, it won't happen again."
 ];
 var LEADER = [
   "{leader} holds the record with {score}. Must be nice having that much free time.",
-  "{score} in {game}. {leader}, does your manager know about this?",
+  "{score} in {game}. {leader}, does your manager know about this shit?",
   "Congrats {leader}. Truly the best at the thing nobody asked you to do.",
   "{leader} is on top. For now. Enjoy it while it lasts.",
   "{score}? Damn, {leader}. Maybe go outside sometime.",
   "{leader}: living proof that Claude does all the actual work.",
   "Bow down to {leader}. Or don't. Honestly, it's {game}.",
-  "Hell of a score, {leader}. Shame about your productivity."
+  "Hell of a score, {leader}. Shame about your fucking productivity."
 ];
-var ALL_LINES = [...BEHIND, ...STUCK, ...NO_BEST, ...RUN_WORSE, ...RUN_BEST, ...LEADER];
+var IN_GAME = [...START, ...BEHIND, ...AHEAD, ...STUCK, ...NO_BEST];
+var ALL_LINES = [...IN_GAME, ...RUN_WORSE, ...RUN_BEST, ...LEADER];
 function fill(template, vars) {
   return template.replace(/\{(score|best|game|time|leader)\}/g, (_, k) => String(vars[k] ?? ""));
 }
 
 // src/core/heckler.ts
-var CHECK_MS = 45e3;
-var STUCK_MS = 45e3;
-var SHOW_MS = 6e3;
-var GAP_MS = 2e4;
+var FIRST_MS = 8e3;
+var CHECK_MS = 2e4;
+var STUCK_MS = 2e4;
+var SHOW_MS = 5e3;
+var GAP_MS = 12e3;
 var BEHIND_RATIO = 0.6;
-var NO_BEST_CHANCE = 0.5;
+var CHANCE = 0.5;
 var Heckler = class {
   constructor(rnd) {
     this.rnd = rnd;
@@ -612,12 +634,14 @@ var Heckler = class {
   shownAt = -Infinity;
   lastLineAt = -Infinity;
   nextCheck = CHECK_MS;
+  opened = false;
   lastScore = null;
   lastChange = 0;
   startRun() {
     this.line = null;
     this.shownAt = -Infinity;
     this.nextCheck = CHECK_MS;
+    this.opened = false;
     this.lastScore = null;
     this.lastChange = 0;
   }
@@ -625,12 +649,17 @@ var Heckler = class {
     if (this.lastScore !== null && i.score !== this.lastScore) this.lastChange = i.playedMs;
     this.lastScore = i.score;
     let pool = null;
-    if (i.playedMs >= this.nextCheck) {
+    if (!this.opened && i.playedMs >= FIRST_MS) {
+      this.opened = true;
+      pool = START;
+    } else if (i.playedMs >= this.nextCheck) {
       while (this.nextCheck <= i.playedMs) this.nextCheck += CHECK_MS;
       if (i.best !== null && i.best > 0) {
         const share = i.expectedMs ? Math.min(1, i.playedMs / i.expectedMs) : 0.5;
-        if (i.score < BEHIND_RATIO * i.best * share) pool = BEHIND;
-      } else if (i.best === null && this.rnd() >= NO_BEST_CHANCE) pool = NO_BEST;
+        const target = i.best * share;
+        if (i.score < BEHIND_RATIO * target) pool = BEHIND;
+        else if (i.score >= target && this.rnd() >= CHANCE) pool = AHEAD;
+      } else if (i.best === null && this.rnd() >= CHANCE) pool = NO_BEST;
     }
     if (!pool && i.playedMs - this.lastChange >= STUCK_MS) {
       pool = STUCK;
@@ -1953,7 +1982,7 @@ function isDrifting(travel, heading) {
 }
 
 // src/games/drift/arena.ts
-var START = { x: 6, y: 10 };
+var START2 = { x: 6, y: 10 };
 var SAFE_ZONE = { x: 1, y: 7, w: 20, h: 7 };
 var MIN_COIN_DIST = 10;
 var ATTEMPTS_PER_PILLAR = 500;
@@ -2175,13 +2204,13 @@ var samePoint = (a, b) => a.x === b.x && a.y === b.y;
 function init2(ctx) {
   const pillars = generatePillars(ctx);
   return {
-    x: START.x,
-    y: START.y,
+    x: START2.x,
+    y: START2.y,
     heading: 0,
     travel: 0,
     lastTurn: 1,
     coins: 0,
-    coin: spawnCoin(START, pillars, ctx),
+    coin: spawnCoin(START2, pillars, ctx),
     extraCoins: [],
     pillars,
     oil: [],
