@@ -368,4 +368,32 @@ describe('http api', () => {
     expect(await status).toBe(401);
     expect(c.db.raw.prepare('SELECT COUNT(*) AS n FROM best').get()).toEqual({ n: 0 });
   });
+
+  test('leaderboard pages: index and per-game page are HTML with a strict CSP; unknown games are 404', async () => {
+    const c = await setup();
+    const t = await login(c);
+    await post(c, '/v1/scores', { game: 'worm', score: 910, at: new Date(c.clock.ms).toISOString() }, bearer(t));
+
+    let res = await fetch(`${c.base}/`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toMatch(/^text\/html/);
+    expect(res.headers.get('content-security-policy')).toContain("default-src 'none'");
+    expect(res.headers.get('x-content-type-options')).toBe('nosniff');
+    let html = await res.text();
+    expect(html).toContain('href="/games/worm"');
+    expect(html).toContain('alice');
+
+    res = await fetch(`${c.base}/games/worm`);
+    expect(res.status).toBe(200);
+    html = await res.text();
+    expect(html).toContain('alice');
+    expect(html).toContain('910');
+    expect(html).toContain('class="quote"');
+
+    res = await fetch(`${c.base}/games/not-a-game`);
+    expect(res.status).toBe(404);
+    expect(res.headers.get('content-type')).toMatch(/^text\/html/);
+    expect((await fetch(`${c.base}/games/BAD!`)).status).toBe(404);
+    expect((await fetch(`${c.base}/`, { method: 'POST' })).status).toBe(404);
+  });
 });

@@ -1,4 +1,4 @@
-// Passive-aggressive "motivation" for the heckler. Placeholders: {score} {best} {game} {time}.
+// Passive-aggressive "motivation" for the heckler. Placeholders: {score} {best} {game} {time} {leader}.
 // House rules: about performance only, never the person; mild swears only (damn, hell,
 // shit, crap), roughly 1 line in 4. Add your own: the tests check the rules.
 
@@ -62,10 +62,22 @@ export const RUN_BEST = [
   "New best. Enjoy it, it won't last.",
 ];
 
-export const ALL_LINES = [...BEHIND, ...STUCK, ...NO_BEST, ...RUN_WORSE, ...RUN_BEST];
+/** Next to the current leader on the web leaderboard ({leader}, {score}, {game}). */
+export const LEADER = [
+  '{leader} holds the record with {score}. Must be nice having that much free time.',
+  '{score} in {game}. {leader}, does your manager know about this?',
+  'Congrats {leader}. Truly the best at the thing nobody asked you to do.',
+  '{leader} is on top. For now. Enjoy it while it lasts.',
+  '{score}? Damn, {leader}. Maybe go outside sometime.',
+  '{leader}: living proof that Claude does all the actual work.',
+  "Bow down to {leader}. Or don't. Honestly, it's {game}.",
+  'Hell of a score, {leader}. Shame about your productivity.',
+];
 
-export type HeckleVars = { score: number | string; best: number | string; game: string; time: string };
+export const ALL_LINES = [...BEHIND, ...STUCK, ...NO_BEST, ...RUN_WORSE, ...RUN_BEST, ...LEADER];
+
+export type HeckleVars = { score: number | string; best: number | string; game: string; time: string; leader?: string };
 
 export function fill(template: string, vars: HeckleVars): string {
-  return template.replace(/\{(score|best|game|time)\}/g, (_, k: keyof HeckleVars) => String(vars[k]));
+  return template.replace(/\{(score|best|game|time|leader)\}/g, (_, k: keyof HeckleVars) => String(vars[k] ?? ''));
 }
