@@ -1,8 +1,10 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import {
-  board, createSession, deletePlayer, deleteSession, playerForToken, submitScore, upsertPlayer, worldBests, type Db,
+  board, createSession, deletePlayer, deleteSession, playerForToken, submitScore, submitWebScore, upsertPlayer,
+  webBoard, worldBests, type Db,
 } from './db';
+import { normalizeWebName } from './webname';
 import { verifyGithubToken } from './github';
 import {
   AT_MAX_AGE_MS, AT_MAX_FUTURE_MS, BOARD_LIMIT, GAME_ID, MAX_BOARD_GAMES, MAX_BODY_BYTES, MAX_GITHUB_INFLIGHT, RATE,
@@ -112,6 +114,8 @@ export function createHandler(deps: HandlerDeps): (req: IncomingMessage, res: Se
   const loginIdLimit = limit(RATE.loginPerGithubId);
   const loginGlobalLimit = limit(RATE.loginGlobal);
   const loginIpLimit = limit(RATE.loginPerIp);
+  const webIpLimit = limit(RATE.webPerIp);
+  const webGlobalLimit = limit(RATE.webGlobal);
   let githubInFlight = 0;
 
   const sessionPlayer = (req: IncomingMessage) => {
@@ -163,6 +167,24 @@ export function createHandler(deps: HandlerDeps): (req: IncomingMessage, res: Se
     return { status: 200, body: result };
   }
 
+  async function webScores(req: IncomingMessage): Promise<Reply> {
+    const date = now();
+    const ms = date.getTime();
+    if (trustProxy && !webIpLimit.hit(clientIp(req), ms)) return { status: 429, body: { error: 'too many submissions' } };
+    if (!webGlobalLimit.hit('*', ms)) return { status: 429, body: { error: 'too many submissions' } };
+    const body = await readJson(req);
+    if (!body) return { status: 400, body: { error: 'bad body' } };
+    const { game, score } = body;
+    if (typeof game !== 'string' || !knownGames().some((g) => g.id === game)) return { status: 400, body: { error: 'unknown game' } };
+    const name = normalizeWebName(body.name);
+    if (name === null) return { status: 400, body: { error: 'bad name' } };
+    if (typeof score !== 'number' || !Number.isInteger(score) || score < 0) {
+      return { status: 400, body: { error: 'score must be a non-negative integer' } };
+    }
+    if (score > maxScoreFor(game)) return { status: 400, body: { error: 'score is above the maximum for this game' } };
+    return { status: 200, body: submitWebScore(db, game, name, score, date) };
+  }
+
   async function route(req: IncomingMessage): Promise<Reply> {
     const url = new URL(req.url ?? '/', 'http://localhost');
     const path = url.pathname;
@@ -179,6 +201,12 @@ export function createHandler(deps: HandlerDeps): (req: IncomingMessage, res: Se
     }
     if (method === 'POST' && path === '/v1/login') return login(req);
     if (method === 'POST' && path === '/v1/scores') return scores(req);
+    if (method === 'POST' && path === '/v1/web-scores') return webScores(req);
+    if (method === 'GET' && path.startsWith('/v1/web-boards/')) {
+      const game = path.slice('/v1/web-boards/'.length);
+      if (!GAME_ID.test(game)) return { status: 400, body: { error: 'bad game id' } };
+      return { status: 200, body: { game, top: webBoard(db, game, BOARD_LIMIT) } };
+    }
     if (method === 'GET' && path === '/v1/boards') {
       const games = gamesParam(url);
       if (games === null) return { status: 400, body: { error: `games must be 1 to ${MAX_BOARD_GAMES} game ids` } };

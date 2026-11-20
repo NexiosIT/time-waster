@@ -1,5 +1,8 @@
 import { basename } from 'node:path';
-import { openDb, board, deletePlayer, playerIdByLogin, playersWithLogin, setBlocked, deleteScore, type Db } from './db';
+import {
+  openDb, board, deletePlayer, playerIdByLogin, playersWithLogin, setBlocked, deleteScore, deleteWebScore, webBoard, type Db,
+} from './db';
+import { normalizeWebName } from './webname';
 
 const USAGE = [
   'Usage: admin.js <command>',
@@ -8,6 +11,8 @@ const USAGE = [
   '  delete-player <login>',
   '  block <login>',
   '  unblock <login>',
+  '  web-board <game>',
+  '  delete-web-score <name> <game>',
 ];
 
 export function runAdmin(db: Db, argv: string[], out: (line: string) => void): number {
@@ -57,6 +62,20 @@ export function runAdmin(db: Db, argv: string[], out: (line: string) => void): n
       if (err) return fail(err);
       setBlocked(db, args[0], cmd === 'block');
       out(`${cmd}ed ${args[0]}`);
+      return 0;
+    }
+    case 'web-board': {
+      if (args.length !== 1) return usage();
+      webBoard(db, args[0], 100).forEach((r) => out(`${r.rank} ${r.name} ${r.score}`));
+      return 0;
+    }
+    case 'delete-web-score': {
+      if (args.length !== 2) return usage();
+      const name = normalizeWebName(args[0]);
+      if (name === null) return fail(`bad name: ${args[0]}`);
+      const shown = webBoard(db, args[1], Number.MAX_SAFE_INTEGER).find((r) => r.name.toLowerCase() === name.toLowerCase());
+      if (!deleteWebScore(db, name, args[1])) return fail(`no web score for ${name} on ${args[1]}`);
+      out(`deleted ${shown ? shown.name : name} ${args[1]}`);
       return 0;
     }
     default:

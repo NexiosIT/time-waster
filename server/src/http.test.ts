@@ -397,3 +397,63 @@ describe('http api', () => {
     expect((await fetch(`${c.base}/`, { method: 'POST' })).status).toBe(404);
   });
 });
+
+describe('web scores api', () => {
+  const web = (c: Ctx, body: unknown, headers: Record<string, string> = {}) => post(c, '/v1/web-scores', body, headers);
+
+  test('a valid post is stored without signing in and returns rank, best and top', async () => {
+    const c = await setup();
+    const res = await web(c, { game: 'galaxy', name: '  Kim   B ', score: 1200 });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { rank: number; best: number; top: { name: string; score: number }[] };
+    expect(body.rank).toBe(1);
+    expect(body.best).toBe(1200);
+    expect(body.top.map((r) => [r.name, r.score])).toEqual([['Kim B', 1200]]);
+    const board = await fetch(c.base + '/v1/web-boards/galaxy');
+    expect(board.status).toBe(200);
+    expect(await board.json()).toMatchObject({ game: 'galaxy', top: [{ rank: 1, name: 'Kim B', score: 1200 }] });
+  });
+
+  test('invalid posts are 400 with a reason', async () => {
+    const c = await setup();
+    const cases: [unknown, string][] = [
+      ['not json', 'bad body'],
+      [{ game: 'nope', name: 'Kim', score: 1 }, 'unknown game'],
+      [{ game: 'galaxy', name: '<b>', score: 1 }, 'bad name'],
+      [{ game: 'galaxy', name: 'Kim', score: -1 }, 'score must be a non-negative integer'],
+      [{ game: 'galaxy', name: 'Kim', score: 1.5 }, 'score must be a non-negative integer'],
+      [{ game: 'galaxy', name: 'Kim', score: 5201 }, 'score is above the maximum for this game'],
+    ];
+    for (const [body, error] of cases) {
+      const res = await web(c, body);
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error });
+    }
+  });
+
+  test('per-IP limit applies only behind a trusted proxy', async () => {
+    const proxied = await setup({ trustProxy: true });
+    const from = (ip: string) => ({ 'x-forwarded-for': `1.2.3.4, ${ip}` });
+    for (let i = 0; i < 30; i++) expect((await web(proxied, { game: 'galaxy', name: `P${i}`, score: i }, from('7.7.7.7'))).status).toBe(200);
+    expect((await web(proxied, { game: 'galaxy', name: 'X', score: 1 }, from('7.7.7.7'))).status).toBe(429);
+    expect((await web(proxied, { game: 'galaxy', name: 'Y', score: 1 }, from('8.8.8.8'))).status).toBe(200);
+
+    const direct = await setup();
+    for (let i = 0; i < 31; i++) expect((await web(direct, { game: 'galaxy', name: `P${i}`, score: i })).status).toBe(200);
+  });
+
+  test('a bad game id on the web board is 400; an unknown valid id is empty', async () => {
+    const c = await setup();
+    expect((await fetch(c.base + '/v1/web-boards/BAD!')).status).toBe(400);
+    expect(await (await fetch(c.base + '/v1/web-boards/nope')).json()).toEqual({ game: 'nope', top: [] });
+  });
+
+  test('web names never appear on the arcade endpoints', async () => {
+    const c = await setup();
+    await web(c, { game: 'galaxy', name: 'WebKim', score: 5000 });
+    const all = await (await fetch(c.base + '/v1/boards?games=galaxy')).text();
+    const one = await (await fetch(c.base + '/v1/boards/galaxy')).text();
+    expect(all).not.toContain('WebKim');
+    expect(one).not.toContain('WebKim');
+  });
+});
