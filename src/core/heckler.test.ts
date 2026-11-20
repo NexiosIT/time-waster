@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { Heckler, CHECK_MS, GAP_MS, SHOW_MS, STUCK_MS } from './heckler';
-import { ALL_LINES, BEHIND, NO_BEST, RUN_BEST, RUN_WORSE, STUCK, fill } from './heckles';
+import { ALL_LINES, BEHIND, LEADER, NO_BEST, RUN_BEST, RUN_WORSE, STUCK, fill } from './heckles';
 import { createRandom } from './random';
 
 const base = { game: 'Worm', expectedMs: null as number | null };
@@ -106,7 +106,7 @@ describe('heckle lines', () => {
 
   it('every template fills without leftover placeholders', () => {
     for (const l of ALL_LINES) {
-      const out = fill(l, { score: 12, best: 34, game: 'Worm', time: '45s' });
+      const out = fill(l, { score: 12, best: 34, game: 'Worm', time: '45s', leader: 'octocat' });
       expect(out).not.toMatch(/[{}]/);
       expect(out.length).toBeLessThanOrEqual(80);
     }
@@ -114,7 +114,8 @@ describe('heckle lines', () => {
 
   it('has enough lines, about 1 in 4 with a mild swear, and nothing harsh', () => {
     expect(ALL_LINES.length).toBeGreaterThanOrEqual(40);
-    for (const list of [BEHIND, STUCK, NO_BEST, RUN_WORSE, RUN_BEST]) expect(list.length).toBeGreaterThanOrEqual(5);
+    for (const list of [BEHIND, STUCK, NO_BEST, RUN_WORSE, RUN_BEST, LEADER]) expect(list.length).toBeGreaterThanOrEqual(5);
+    for (const l of LEADER) expect(l).toContain('{leader}');
     const swearing = ALL_LINES.filter((l) => SWEARS.test(l)).length;
     expect(swearing / ALL_LINES.length).toBeGreaterThanOrEqual(0.2);
     expect(swearing / ALL_LINES.length).toBeLessThanOrEqual(0.35);
