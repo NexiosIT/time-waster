@@ -52,3 +52,4 @@
 - sonnet 5
 - sonnet 6
 - sonnet 7
+- sonnet 8
