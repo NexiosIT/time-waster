@@ -329,7 +329,7 @@ var App = class {
     const seen = /* @__PURE__ */ new Set();
     const ok = [];
     for (const g of opts.games) {
-      if (typeof g.id !== "string" || !ID_RE.test(g.id) || seen.has(g.id)) continue;
+      if (!wellFormed(g) || !ID_RE.test(g.id) || seen.has(g.id)) continue;
       seen.add(g.id);
       ok.push(g);
     }
@@ -341,7 +341,10 @@ var App = class {
     if (start) this.start(start, opts.nowMs);
   }
   key(k, nowMs) {
-    if (k === "ctrl-c") return "quit";
+    if (k === "ctrl-c") {
+      this.quit();
+      return "quit";
+    }
     switch (this.screen) {
       case "menu":
         if (k === "q") return "quit";
@@ -363,9 +366,16 @@ var App = class {
         else if (k === "escape") this.toMenu();
         break;
       case "crashed":
-        if (k === "enter") this.toMenu();
+        if (k === "enter" || k === "escape") this.toMenu();
         break;
     }
+  }
+  /** Closing the arcade ends a run in progress and saves its score. */
+  quit() {
+    const s = this.session;
+    if (this.screen !== "playing" || !s || s.status !== "playing" && s.status !== "paused") return;
+    s.end();
+    this.finish(s.score);
   }
   tick(nowMs) {
     if (this.screen !== "playing") return;
@@ -403,9 +413,9 @@ var App = class {
     }
     buf.blit(area, Math.floor((cols - GAME_WIDTH) / 2), 1);
     const marker = view?.mode === "marker" ? view.text : "";
-    const room = marker ? cols - marker.length - 2 : cols;
+    const room = marker ? cols - marker.length - 3 : cols;
     buf.text(0, rows - 1, clip(status, room), "white");
-    if (marker) buf.text(cols - marker.length, rows - 1, marker, bcolor);
+    if (marker) buf.text(cols - marker.length - 1, rows - 1, marker, bcolor);
     return buf;
   }
   start(game, nowMs) {
@@ -471,6 +481,7 @@ var App = class {
         area.text(10, 4 + i, clip(line, 36), i === this.sel ? "brightWhite" : "white");
         area.text(48, 4 + i, clip(`Best ${best}`, 12), "gray");
       });
+      area.text(0, 17, clip(this.games[this.sel].description, GAME_WIDTH), "gray");
     } else if (this.screen === "results" && this.results) {
       const r = this.results;
       centre(1, `${this.game.title} \u2014 Score ${r.score}`, "brightWhite");
@@ -480,10 +491,13 @@ var App = class {
       centre(18, "Enter: play again \xB7 Esc: menu", "gray");
     } else if (this.screen === "crashed") {
       centre(8, this.crash, "brightRed");
-      centre(18, "Enter: menu", "gray");
+      centre(18, "Enter or Esc: menu", "gray");
     }
   }
 };
+function wellFormed(g) {
+  return typeof g.id === "string" && typeof g.title === "string" && typeof g.description === "string" && typeof g.controls === "string" && typeof g.tickMs === "number" && Number.isFinite(g.tickMs) && g.tickMs > 0 && [g.init, g.onKey, g.update, g.draw, g.score, g.isOver].every((f) => typeof f === "function");
+}
 function clip(s, n) {
   return n <= 0 ? "" : s.length > n ? s.slice(0, n) : s;
 }
@@ -556,6 +570,7 @@ function renderDiff(prev2, next) {
   for (let y = 0; y < next.height; y++) {
     let cursorX = -1;
     for (let x = 0; x < next.width; x++) {
+      if (y === next.height - 1 && x === next.width - 1) continue;
       const c = next.get(x, y);
       if (!full) {
         const p = prev2.get(x, y);
@@ -640,12 +655,13 @@ var EventWatcher = class {
   onEvent;
   pollMs;
   offset = 0;
-  startedAt = 0;
+  lastAt = 0;
+  // `at` of the newest delivered event; older or equal ones are never re-delivered
   watcher = null;
   timer = null;
   start() {
     this.stop();
-    this.startedAt = Date.now();
+    this.lastAt = Date.now() - 1;
     try {
       import_node_fs2.default.mkdirSync(path2.dirname(this.file), { recursive: true });
     } catch {
@@ -676,7 +692,9 @@ var EventWatcher = class {
     this.offset = r.offset;
     for (const e of r.events) {
       const t = Date.parse(e.at);
-      if (!Number.isNaN(t) && t >= this.startedAt) this.onEvent(e);
+      if (Number.isNaN(t) || t <= this.lastAt) continue;
+      this.lastAt = t;
+      this.onEvent(e);
     }
   }
 };
@@ -781,6 +799,10 @@ var done = false;
 function shutdown(code, err) {
   if (done) return;
   done = true;
+  if (err === void 0) try {
+    app.quit();
+  } catch {
+  }
   if (timer) clearInterval(timer);
   watcher.stop();
   process.stdout.write(LEAVE_ALT);
@@ -792,6 +814,7 @@ function shutdown(code, err) {
   process.exit(code);
 }
 process.on("SIGINT", () => shutdown(0));
+process.on("SIGHUP", () => shutdown(0));
 process.on("uncaughtException", (e) => shutdown(1, e));
 process.stdin.setRawMode(true);
 process.stdin.setEncoding("utf8");

@@ -5,6 +5,8 @@ import { build } from 'esbuild';
 import { discoverGames } from './discover.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+const outArg = process.argv.indexOf('--outdir');
+const outdir = join(root, outArg > 1 && process.argv[outArg + 1] ? process.argv[outArg + 1] : 'dist');
 const gamesDir = join(root, 'src', 'games');
 
 mkdirSync(gamesDir, { recursive: true });
@@ -21,7 +23,7 @@ writeFileSync(join(gamesDir, 'registry.generated.ts'), registry);
 
 await build({
   entryPoints: ['arcade', 'signal', 'launch'].map((n) => join(root, 'src', `${n}.ts`)),
-  outdir: join(root, 'dist'),
+  outdir,
   bundle: true,
   platform: 'node',
   target: 'node20',

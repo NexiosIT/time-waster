@@ -47,7 +47,7 @@ export class App {
     const seen = new Set<string>();
     const ok: Game<any>[] = [];
     for (const g of opts.games) {
-      if (typeof g.id !== 'string' || !ID_RE.test(g.id) || seen.has(g.id)) continue;
+      if (!wellFormed(g) || !ID_RE.test(g.id) || seen.has(g.id)) continue;
       seen.add(g.id);
       ok.push(g);
     }
@@ -60,7 +60,10 @@ export class App {
   }
 
   key(k: Key, nowMs: number): 'quit' | void {
-    if (k === 'ctrl-c') return 'quit';
+    if (k === 'ctrl-c') {
+      this.quit();
+      return 'quit';
+    }
     switch (this.screen) {
       case 'menu':
         if (k === 'q') return 'quit';
@@ -82,9 +85,17 @@ export class App {
         else if (k === 'escape') this.toMenu();
         break;
       case 'crashed':
-        if (k === 'enter') this.toMenu();
+        if (k === 'enter' || k === 'escape') this.toMenu();
         break;
     }
+  }
+
+  /** Closing the arcade ends a run in progress and saves its score. */
+  quit(): void {
+    const s = this.session;
+    if (this.screen !== 'playing' || !s || (s.status !== 'playing' && s.status !== 'paused')) return;
+    s.end();
+    this.finish(s.score);
   }
 
   tick(nowMs: number): void {
@@ -127,9 +138,9 @@ export class App {
     buf.blit(area, Math.floor((cols - GAME_WIDTH) / 2), 1);
 
     const marker = view?.mode === 'marker' ? view.text : '';
-    const room = marker ? cols - marker.length - 2 : cols;
+    const room = marker ? cols - marker.length - 3 : cols;
     buf.text(0, rows - 1, clip(status, room), 'white');
-    if (marker) buf.text(cols - marker.length, rows - 1, marker, bcolor);
+    if (marker) buf.text(cols - marker.length - 1, rows - 1, marker, bcolor);
     return buf;
   }
 
@@ -200,6 +211,7 @@ export class App {
         area.text(10, 4 + i, clip(line, 36), i === this.sel ? 'brightWhite' : 'white');
         area.text(48, 4 + i, clip(`Best ${best}`, 12), 'gray');
       });
+      area.text(0, 17, clip(this.games[this.sel].description, GAME_WIDTH), 'gray');
     } else if (this.screen === 'results' && this.results) {
       const r = this.results;
       centre(1, `${this.game!.title} — Score ${r.score}`, 'brightWhite');
@@ -209,9 +221,20 @@ export class App {
       centre(18, 'Enter: play again · Esc: menu', 'gray');
     } else if (this.screen === 'crashed') {
       centre(8, this.crash, 'brightRed');
-      centre(18, 'Enter: menu', 'gray');
+      centre(18, 'Enter or Esc: menu', 'gray');
     }
   }
+}
+
+function wellFormed(g: Game<any>): boolean {
+  return (
+    typeof g.id === 'string' &&
+    typeof g.title === 'string' &&
+    typeof g.description === 'string' &&
+    typeof g.controls === 'string' &&
+    typeof g.tickMs === 'number' && Number.isFinite(g.tickMs) && g.tickMs > 0 &&
+    [g.init, g.onKey, g.update, g.draw, g.score, g.isOver].every((f) => typeof f === 'function')
+  );
 }
 
 function clip(s: string, n: number): string {

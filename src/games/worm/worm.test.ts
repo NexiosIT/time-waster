@@ -4,6 +4,7 @@ import type { GameContext } from '../../core/types';
 import worm, { spawnDot } from './index';
 
 const ctx = (seed = 1): GameContext => ({ random: createRandom(seed), elapsedMs: 0 });
+type Point = { x: number; y: number };
 const row = (n: number, y: number) => Array.from({ length: n }, (_, i) => ({ x: 14 - i, y }));
 
 describe('worm', () => {
@@ -71,9 +72,10 @@ describe('worm', () => {
   it('may enter the cell the tail is leaving, unless it grows that tick', () => {
     const c = ctx();
     const s = worm.init(c);
-    // 2x2 square: head (1,1) moving up->left would step into tail cell (0,1).
+    // 2x2 square: head (1,1) having moved down, now turning left, would step into tail cell (0,1).
     s.body = [{ x: 1, y: 1 }, { x: 1, y: 0 }, { x: 0, y: 0 }, { x: 0, y: 1 }];
-    s.moved = s.pending = 'left';
+    s.moved = 'down';
+    s.pending = 'left';
     s.dot = { x: 5, y: 5 };
     expect(worm.isOver(worm.update(s, c))).toBe(false);
     s.dot = { x: 0, y: 1 }; // eating on the tail cell: tail stays, so it is a collision
@@ -89,7 +91,7 @@ describe('worm', () => {
   });
 
   it('spawnDot returns null on a full board', () => {
-    const body = [];
+    const body: Point[] = [];
     for (let y = 0; y < 20; y++) for (let x = 0; x < 60; x++) body.push({ x, y });
     expect(spawnDot(body, ctx())).toBeNull();
   });

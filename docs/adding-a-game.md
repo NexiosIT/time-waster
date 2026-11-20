@@ -71,8 +71,9 @@ needs a key to be held down or two keys at once.
 ## Develop and test
 
 ```
-npm run dev -- <id>     # build, then start the arcade directly in your game
+npm run dev -- <id>     # build into .dev/ (git-ignored), then start the arcade in your game
 npm test                # run all tests
+npm run typecheck       # type-check before you finish
 ```
 
 Write `src/games/<id>/<id>.test.ts` and test **through the contract** with a fixed seed,

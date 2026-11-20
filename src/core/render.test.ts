@@ -52,6 +52,15 @@ describe('renderDiff', () => {
   it('does a full redraw when sizes differ', () => {
     expect(renderDiff(new CellBuffer(2, 2), new CellBuffer(3, 2)).startsWith('\x1b[2J')).toBe(true);
   });
+  it('never writes the last cell of the last row (full or diff)', () => {
+    const b = new CellBuffer(3, 2);
+    b.text(0, 1, 'xyz');
+    expect(renderDiff(null, b)).not.toContain('z');
+    expect(renderDiff(null, b)).toContain('xy');
+    const a = new CellBuffer(3, 2);
+    expect(renderDiff(a, b)).not.toContain('z');
+    expect(renderDiff(a, b)).toContain('xy');
+  });
   it('exports alt-screen sequences', () => {
     expect(ENTER_ALT).toBe('\x1b[?1049h\x1b[?25l');
     expect(LEAVE_ALT).toBe('\x1b[0m\x1b[?25h\x1b[?1049l');

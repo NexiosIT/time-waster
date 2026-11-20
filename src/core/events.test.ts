@@ -139,6 +139,22 @@ describe('EventWatcher', () => {
     expect(got.map((e) => e.project)).toEqual(['fresh']);
   });
 
+  it('does not replay an already delivered event after another window trims the file', async () => {
+    const got: ClaudeEvent[] = [];
+    w = new EventWatcher(file, (e) => got.push(e), 20);
+    w.start();
+    const t1 = fresh();
+    fs.appendFileSync(file, line('done', t1, 'one'));
+    await until(() => got.length > 0);
+    const t0 = new Date(Date.parse(t1) - 500).toISOString();
+    fs.writeFileSync(file, line('done', t0, 'older') + line('done', t1, 'one'));
+    await new Promise((r) => setTimeout(r, 150));
+    expect(got.map((e) => e.project)).toEqual(['one']);
+    fs.appendFileSync(file, line('done', new Date(Date.parse(t1) + 500).toISOString(), 'newer'));
+    await until(() => got.length > 1);
+    expect(got.map((e) => e.project)).toEqual(['one', 'newer']);
+  });
+
   it('tolerates a missing dir and fs.watch throwing; poll still works', async () => {
     const f = path.join(tmp, 'nope', 'sub', 'events.jsonl');
     vi.spyOn(fs, 'watch').mockImplementation(() => {

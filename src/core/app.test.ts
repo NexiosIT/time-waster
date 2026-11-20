@@ -194,4 +194,68 @@ describe('App', () => {
     app.key('escape', 100);
     expect(rows(app, 80, 30, 20_000)[29]).not.toContain('Claude');
   });
+
+  it('ctrl-c mid-run saves the score (quit ends the run)', () => {
+    const app = mk([fake('a', 'Alpha', { isOver: () => false })]);
+    app.key('enter', 0);
+    app.tick(100); app.tick(200);
+    expect(app.key('ctrl-c', 200)).toBe('quit');
+    expect(loadScores(file).a.map((e) => e.score)).toEqual([2]);
+  });
+
+  it('quit() on the menu saves nothing', () => {
+    const app = mk([fake('a', 'Alpha')]);
+    app.quit();
+    expect(fs.existsSync(file)).toBe(false);
+  });
+
+  it('quit() while paused saves the score', () => {
+    const app = mk([fake('a', 'Alpha', { isOver: () => false })]);
+    app.key('enter', 0);
+    app.tick(100);
+    app.key('p', 100);
+    app.quit();
+    expect(loadScores(file).a).toHaveLength(1);
+  });
+
+  it('shows the selected game description in the menu, clipped to 60 chars', () => {
+    const app = mk([fake('a', 'Alpha', { description: 'First game' }), fake('b', 'Beta', { description: 'x'.repeat(80) })]);
+    let r = rows(app);
+    expect(has(r, 'First game')).toBe(true);
+    app.key('down', 0);
+    r = rows(app);
+    expect(has(r, 'First game')).toBe(false);
+    expect(has(r, 'x'.repeat(60))).toBe(true);
+    expect(has(r, 'x'.repeat(61))).toBe(false);
+  });
+
+  it('skips malformed games instead of crashing', () => {
+    const bad: any[] = [
+      fake('t', 'T', { title: 5 as any }),
+      fake('d', 'D', { description: undefined as any }),
+      fake('c', 'C', { controls: null as any }),
+      fake('k0', 'K0', { tickMs: 0 }),
+      fake('kn', 'KN', { tickMs: NaN }),
+      fake('ks', 'KS', { tickMs: '100' as any }),
+      fake('f1', 'F1', { init: undefined as any }),
+      fake('f2', 'F2', { onKey: 1 as any }),
+      fake('f3', 'F3', { update: null as any }),
+      fake('f4', 'F4', { draw: {} as any }),
+      fake('f5', 'F5', { score: undefined as any }),
+      fake('f6', 'F6', { isOver: 'x' as any }),
+    ];
+    const app = mk([...bad, fake('ok', 'Fine')]);
+    const text = rows(app).join('\n');
+    expect(text).toContain('Fine');
+    for (const n of ['K0', 'KN', 'KS', 'F1', 'F2', 'F3', 'F4', 'F5', 'F6']) expect(text).not.toContain(n);
+    expect(rows(app).filter((l) => l.includes('Best ')).length).toBe(1);
+  });
+
+  it('Esc on the crash screen returns to the menu', () => {
+    const app = mk([fake('a', 'Alpha', { update: () => { throw new Error('boom'); } })]);
+    app.key('enter', 0);
+    play(app);
+    app.key('escape', 0);
+    expect(has(rows(app), 'ARCADE')).toBe(true);
+  });
 });

@@ -17,6 +17,7 @@ export function renderDiff(prev: CellBuffer | null, next: CellBuffer): string {
   for (let y = 0; y < next.height; y++) {
     let cursorX = -1; // x where the cursor sits after the last write on this row
     for (let x = 0; x < next.width; x++) {
+      if (y === next.height - 1 && x === next.width - 1) continue; // writing it can scroll conhost
       const c = next.get(x, y);
       if (!full) {
         const p = prev!.get(x, y);

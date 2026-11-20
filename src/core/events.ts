@@ -97,7 +97,7 @@ export function readNewEvents(file: string, offset: number): { events: ClaudeEve
 
 export class EventWatcher {
   private offset = 0;
-  private startedAt = 0;
+  private lastAt = 0; // `at` of the newest delivered event; older or equal ones are never re-delivered
   private watcher: fs.FSWatcher | null = null;
   private timer: NodeJS.Timeout | null = null;
 
@@ -109,7 +109,7 @@ export class EventWatcher {
 
   start(): void {
     this.stop();
-    this.startedAt = Date.now();
+    this.lastAt = Date.now() - 1; // an event stamped in the start millisecond still counts
     try {
       fs.mkdirSync(path.dirname(this.file), { recursive: true });
     } catch {
@@ -142,7 +142,9 @@ export class EventWatcher {
     this.offset = r.offset;
     for (const e of r.events) {
       const t = Date.parse(e.at);
-      if (!Number.isNaN(t) && t >= this.startedAt) this.onEvent(e);
+      if (Number.isNaN(t) || t <= this.lastAt) continue;
+      this.lastAt = t;
+      this.onEvent(e);
     }
   }
 }

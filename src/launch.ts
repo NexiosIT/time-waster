@@ -70,6 +70,7 @@ export async function main(): Promise<void> {
       console.log(
         `[Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path','User') + ';' + "$env:USERPROFILE\\.time-waster\\bin", 'User')`,
       );
+      console.log('Then restart Claude Code.');
     }
   } catch (e) {
     console.log('Could not open the arcade: ' + (e instanceof Error ? e.message : String(e)));
@@ -77,5 +78,5 @@ export async function main(): Promise<void> {
 }
 
 if (require.main === module) {
-  void main().then(() => process.exit(0));
+  void main();
 }

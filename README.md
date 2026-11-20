@@ -47,8 +47,8 @@ Restart Claude Code. On session start the plugin creates
 | In game | Esc            | End the run (score is saved), back to the menu    |
 | Results | Enter           | Play again                                        |
 | Results | Esc             | Back to the menu                                  |
-| Crash   | Enter           | Back to the menu                                  |
-| Anywhere | Ctrl+C         | Restore the terminal and exit                     |
+| Crash   | Enter / Esc     | Back to the menu                                  |
+| Anywhere | Ctrl+C         | Save a run in progress, restore terminal, exit    |
 
 All other keys go to the game; each game shows its own controls in the status line.
 
@@ -81,5 +81,6 @@ which avoids merge conflicts. After merging to `main`, whoever merges runs
 npm install
 npm test             # vitest
 npm run build        # bundles dist/ and regenerates the game list
-npm run dev -- <id>  # build, then run the arcade
+npm run typecheck    # tsc --noEmit
+npm run dev -- <id>  # build into .dev/ (git-ignored; dist/ is untouched), then run the arcade
 ```

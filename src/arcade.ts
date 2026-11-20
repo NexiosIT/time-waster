@@ -23,6 +23,7 @@ let done = false;
 function shutdown(code: number, err?: unknown): void {
   if (done) return;
   done = true;
+  if (err === undefined) try { app.quit(); } catch { /* ignore */ } // save the score of a run in progress (never after a crash)
   if (timer) clearInterval(timer);
   watcher.stop();
   process.stdout.write(LEAVE_ALT);
@@ -32,6 +33,7 @@ function shutdown(code: number, err?: unknown): void {
 }
 
 process.on('SIGINT', () => shutdown(0));
+process.on('SIGHUP', () => shutdown(0));
 process.on('uncaughtException', (e) => shutdown(1, e));
 
 process.stdin.setRawMode(true);
