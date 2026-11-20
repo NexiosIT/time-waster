@@ -5,18 +5,20 @@ import { eventsFile, binDir } from './core/paths';
 export function main(argv: string[], stdinText: string, home?: string): void {
   try {
     const cmd = argv[0];
-    if (cmd === 'done' || cmd === 'attention') {
+    const { cwd: cwdFlag, positional } = parseArgs(argv.slice(1));
+    if (cmd === 'attention') {
       const ev = toEvent(cmd, stdinText, new Date());
       if (ev) appendEvent(eventsFile(home), ev);
-    } else if (cmd === 'start' || cmd === 'estimate') {
-      const rest = argv.slice(1);
-      let cwd = process.cwd();
-      const positional: string[] = [];
-      for (let i = 0; i < rest.length; i++) {
-        if (rest[i] === '--cwd' && i + 1 < rest.length) cwd = rest[++i];
-        else positional.push(rest[i]);
+    } else if (cmd === 'done') {
+      // From the Stop hook: the session's cwd on stdin. From the mod: --cwd, the same string its `start` used.
+      const ev = toEvent(cmd, stdinText, new Date());
+      if (ev) {
+        if (cwdFlag !== undefined) ev.project = path.win32.basename(cwdFlag);
+        else if (ev.project === '') ev.project = path.win32.basename(process.cwd());
+        appendEvent(eventsFile(home), ev);
       }
-      const project = path.win32.basename(cwd);
+    } else if (cmd === 'start' || cmd === 'estimate') {
+      const project = path.win32.basename(cwdFlag ?? process.cwd());
       const at = new Date().toISOString();
       if (cmd === 'start') {
         appendEvent(eventsFile(home), { type: 'start', at, project });
@@ -30,6 +32,16 @@ export function main(argv: string[], stdinText: string, home?: string): void {
   } catch {
     // never fail: a non-zero Stop hook exit would block Claude
   }
+}
+
+function parseArgs(rest: string[]): { cwd: string | undefined; positional: string[] } {
+  let cwd: string | undefined;
+  const positional: string[] = [];
+  for (let i = 0; i < rest.length; i++) {
+    if (rest[i] === '--cwd' && i + 1 < rest.length) cwd = rest[++i];
+    else positional.push(rest[i]);
+  }
+  return { cwd, positional };
 }
 
 function readStdin(timeoutMs: number): Promise<string> {

@@ -59,4 +59,23 @@ describe('signal main', () => {
     expect(evs[1]).toMatchObject({ type: 'estimate', minutes: 7, project: 'other' });
     expect(evs[2]).toMatchObject({ type: 'estimate', minutes: 8, project: 'third' });
   });
+  it('done --cwd sets the project from the path, with empty stdin', () => {
+    main(['done', '--cwd', 'C:\\x\\demo'], '', home);
+    const ev = JSON.parse(fs.readFileSync(eventsFile(home), 'utf8').trim());
+    expect(ev).toMatchObject({ type: 'done', project: 'demo' });
+  });
+  it('done --cwd wins over a stdin cwd; without --cwd the stdin cwd stands', () => {
+    main(['done', '--cwd', 'C:\\x\\flag'], JSON.stringify({ cwd: 'C:\\x\\stdin' }), home);
+    main(['done'], JSON.stringify({ cwd: 'C:\\x\\stdin' }), home);
+    const evs = fs.readFileSync(eventsFile(home), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    expect(evs[0]).toMatchObject({ type: 'done', project: 'flag' });
+    expect(evs[1]).toMatchObject({ type: 'done', project: 'stdin' });
+  });
+  it('done with no usable stdin and no --cwd still writes, for the process folder like start', () => {
+    main(['done'], 'not json', home);
+    main(['start'], '', home);
+    const evs = fs.readFileSync(eventsFile(home), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    expect(evs[0]).toMatchObject({ type: 'done', project: path.win32.basename(process.cwd()) });
+    expect(evs[0].project).toBe(evs[1].project);
+  });
 });
