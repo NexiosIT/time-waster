@@ -1,0 +1,5 @@
+# Future game ideas
+- idea 1
+- idea 2
+- idea 3
+- idea 4
