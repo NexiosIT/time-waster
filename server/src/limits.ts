@@ -1,7 +1,11 @@
 import { games } from '../../src/games/registry.generated';
 
 export const DEFAULT_MAX_SCORE = 1_000_000;
-export const GAME_ID = /^[a-z0-9-]+$/;
+export const GAME_ID = /^[a-z0-9-]{1,32}$/;
+/** Most games one GET /v1/boards?games= may ask for. */
+export const MAX_BOARD_GAMES = 50;
+/** GitHub verifications allowed in flight at once; logins beyond that get 503. */
+export const MAX_GITHUB_INFLIGHT = 20;
 export const MAX_BODY_BYTES = 4 * 1024;
 export const AT_MAX_FUTURE_MS = 5 * 60_000;
 export const AT_MAX_AGE_MS = 30 * 24 * 60 * 60_000;

@@ -10,7 +10,10 @@ export async function verifyGithubToken(
     },
     signal: AbortSignal.timeout(5000),
   });
-  if (res.status !== 200) return null;
+  if (res.status !== 200) {
+    await res.body?.cancel(); // free the connection instead of leaving the body unread
+    return null;
+  }
   const body = (await res.json()) as { id?: unknown; login?: unknown };
   if (typeof body.id !== 'number' || typeof body.login !== 'string') return null;
   return { id: body.id, login: body.login };

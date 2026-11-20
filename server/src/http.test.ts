@@ -1,4 +1,4 @@
-import { createServer, type Server } from 'node:http';
+import { createServer, request, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, test } from 'vitest';
 import { openDb, setBlocked, type Db } from './db';
@@ -107,7 +107,7 @@ describe('http api', () => {
     const c = await setup();
     const t = await login(c);
     const bad: Record<string, unknown>[] = [
-      { game: 'Worm' }, { game: '../x' }, { game: '' }, { game: 7 },
+      { game: 'Worm' }, { game: '../x' }, { game: '' }, { game: 7 }, { game: 'a'.repeat(33) },
       { score: -1 }, { score: 1.5 }, { score: '10' }, { score: 5221 }, // worm maxScore is 5220
       { game: 'unknown-game', score: 1_000_001 },                       // default maxScore
       { at: iso(c, 5 * MIN + 1000) }, { at: iso(c, -30 * DAY - 1000) }, { at: 'yesterday' }, { at: 123 },
@@ -115,7 +115,7 @@ describe('http api', () => {
     for (const b of bad) expect((await score(c, t, b)).status, JSON.stringify(b)).toBe(400);
 
     const good: Record<string, unknown>[] = [
-      { score: 0 }, { score: 5220 }, { game: 'unknown-game', score: 1_000_000 },
+      { score: 0 }, { score: 5220 }, { game: 'unknown-game', score: 1_000_000 }, { game: 'a'.repeat(32) },
       { at: iso(c, 4 * MIN) }, { at: iso(c, -29 * DAY) },
     ];
     for (const g of good) expect((await score(c, t, g)).status, JSON.stringify(g)).toBe(200);
@@ -160,10 +160,12 @@ describe('http api', () => {
     expect((await post(c, '/v1/login', { githubToken: 'gh-bob' })).status).toBe(200);
   }, 30_000);
 
-  test('per-IP login limit applies only with trustProxy and uses the first X-Forwarded-For entry', async () => {
+  test('per-IP login limit applies only with trustProxy and uses the last X-Forwarded-For entry', async () => {
     // Failed logins count too: the per-IP check runs before GitHub is asked.
+    // The last entry is the one the single trusted proxy added; earlier ones are client-supplied.
     const proxied = await setup({ trustProxy: true });
-    const from = (ip: string) => ({ 'x-forwarded-for': `${ip}, 10.0.0.1` });
+    let n = 0;
+    const from = (ip: string) => ({ 'x-forwarded-for': `9.9.9.${n++ % 250}, ${ip}` });
     for (let i = 0; i < 30; i++) {
       expect((await post(proxied, '/v1/login', { githubToken: 'gh-x' }, from('1.1.1.1'))).status).toBe(401);
     }
@@ -232,6 +234,7 @@ describe('http api', () => {
     expect(((await res.json()) as typeof body).me).toBeNull();
 
     expect((await fetch(`${c.base}/v1/boards/Bad_Id`)).status).toBe(400);
+    expect((await fetch(`${c.base}/v1/boards/${'a'.repeat(33)}`)).status).toBe(400);
 
     res = await fetch(`${c.base}/v1/boards`);
     expect(res.status).toBe(200);
@@ -279,5 +282,90 @@ describe('http api', () => {
     res = await post(c, '/v1/login', { githubToken: 'gh-alice', pad: 'x'.repeat(5000) });
     expect(res.status).toBe(413);
     expect(res.headers.get('content-type')).toMatch(/^application\/json/);
+  });
+
+  test('GET /v1/boards?games= returns only the listed games; bad lists are 400', async () => {
+    const c = await setup();
+    const bob = await login(c, 'gh-bob');
+    await score(c, bob, { score: 300 });
+    await score(c, bob, { game: 'drift', score: 7 });
+    await score(c, bob, { game: 'tank-duel', score: 3 });
+
+    let res = await fetch(`${c.base}/v1/boards?games=worm,drift,rail-dash`);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ boards: { worm: { login: 'bob', score: 300 }, drift: { login: 'bob', score: 7 } } });
+
+    for (const q of ['', 'worm,,drift', 'Worm', 'a'.repeat(33), Array.from({ length: 51 }, (_, i) => `g${i}`).join(',')]) {
+      res = await fetch(`${c.base}/v1/boards?games=${q}`);
+      expect(res.status, q).toBe(400);
+    }
+    const fifty = Array.from({ length: 49 }, (_, i) => `g${i}`).concat('worm').join(',');
+    res = await fetch(`${c.base}/v1/boards?games=${fifty}`);
+    expect(await res.json()).toEqual({ boards: { worm: { login: 'bob', score: 300 } } });
+  });
+
+  test('DELETE /v1/session ends that session only; without a valid token it is 401', async () => {
+    const c = await setup();
+    const del = (headers: Record<string, string> = {}) => fetch(`${c.base}/v1/session`, { method: 'DELETE', headers });
+    expect((await del()).status).toBe(401);
+    expect((await del(bearer('not-a-real-token'))).status).toBe(401);
+    const t1 = await login(c, 'gh-alice');
+    const t2 = await login(c, 'gh-alice');
+    await score(c, t1, { score: 100 });
+    expect((await del(bearer(t1))).status).toBe(204);
+    expect((await score(c, t1, {})).status).toBe(401);
+    expect((await del(bearer(t1))).status).toBe(401);
+    expect((await score(c, t2, { score: 5 })).status).toBe(200);
+    // Signing out keeps the scores.
+    const top = ((await (await fetch(`${c.base}/v1/boards/worm`)).json()) as any).top;
+    expect(top.map((r: any) => [r.login, r.score])).toEqual([['alice', 100]]);
+  });
+
+  test('more than 20 GitHub verifications in flight is 503 with a JSON error', async () => {
+    const waiting: (() => void)[] = [];
+    let calls = 0;
+    const slow = (async (input: string | URL | Request, init?: RequestInit) => {
+      calls++;
+      await new Promise<void>((r) => waiting.push(r));
+      return stubFetch(input, init);
+    }) as typeof fetch;
+    const c = await setup({ fetchFn: slow });
+    const pending = Array.from({ length: 20 }, (_, i) => post(c, '/v1/login', { githubToken: `gh-user-${i}` }));
+    while (calls < 20) await new Promise((r) => setTimeout(r, 5));
+    const res = await post(c, '/v1/login', { githubToken: 'gh-bob' });
+    expect(res.status).toBe(503);
+    expect(res.headers.get('content-type')).toMatch(/^application\/json/);
+    expect(await res.json()).toEqual({ error: expect.any(String) });
+    expect(calls).toBe(20);
+    waiting.splice(0).forEach((r) => r());
+    expect(new Set((await Promise.all(pending)).map((r) => r.status))).toEqual(new Set([200]));
+    // Slots are released once verifications finish.
+    const after = post(c, '/v1/login', { githubToken: 'gh-bob' });
+    while (waiting.length < 1) await new Promise((r) => setTimeout(r, 5));
+    waiting.splice(0).forEach((r) => r());
+    expect((await after).status).toBe(200);
+  });
+
+  test('a submit racing DELETE /v1/me stores nothing and is 401', async () => {
+    const c = await setup();
+    const t = await login(c, 'gh-alice');
+    // Hold the body back so the delete lands between the session check and the insert.
+    const url = new URL(c.base + '/v1/scores');
+    const status = new Promise<number>((resolve, reject) => {
+      const req = request(
+        { host: url.hostname, port: url.port, path: url.pathname, method: 'POST', headers: { 'content-type': 'application/json', ...bearer(t) } },
+        (res) => { res.resume(); resolve(res.statusCode ?? 0); },
+      );
+      req.on('error', reject);
+      req.write('{"game":"worm",');
+      setTimeout(() => {
+        fetch(`${c.base}/v1/me`, { method: 'DELETE', headers: bearer(t) }).then(
+          (r) => { expect(r.status).toBe(204); req.end(`"score":10,"at":"${iso(c)}"}`); },
+          reject,
+        );
+      }, 50);
+    });
+    expect(await status).toBe(401);
+    expect(c.db.raw.prepare('SELECT COUNT(*) AS n FROM best').get()).toEqual({ n: 0 });
   });
 });

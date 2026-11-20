@@ -1,8 +1,12 @@
 import { describe, expect, test } from 'vitest';
 import {
   openDb, upsertPlayer, createSession, playerForToken, submitScore, board, worldBests,
-  deletePlayer, setBlocked, deleteScore, playerIdByLogin, playersWithLogin,
+  deletePlayer, setBlocked, deleteScore, playerIdByLogin, playersWithLogin, deleteSession,
 } from './db';
+import { DatabaseSync } from 'node:sqlite';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const t = (n: number) => new Date(Date.UTC(2026, 0, 1, 0, 0, n));
 const AT = '2026-01-01T00:00:00.000Z';
@@ -18,7 +22,7 @@ describe('db', () => {
     submitScore(db, 1, 'snake', 100, AT, t(1));
     submitScore(db, 1, 'snake', 50, AT, t(2));
     const r = submitScore(db, 1, 'snake', 150, AT, t(3));
-    expect(r.best).toBe(150);
+    expect(r?.best).toBe(150);
     const row = db.raw.prepare('SELECT * FROM best WHERE player_id = 1').get() as any;
     expect(row.submissions).toBe(3);
     expect(row.score).toBe(150);
@@ -41,7 +45,7 @@ describe('db', () => {
     const a = submitScore(db, 1, 'g', 100, AT, t(2));
     const b = submitScore(db, 1, 'g', 100, AT, t(3));
     expect(b).toEqual(a);
-    expect(a.rank).toBe(2);
+    expect(a?.rank).toBe(2);
     expect(board(db, 'g', 10).top).toHaveLength(2);
   });
 
@@ -119,5 +123,45 @@ describe('db', () => {
     expect(playersWithLogin(db, 'ALICE')).toBe(1);
     expect(setBlocked(db, 'alice', true)).toBe(true);
     expect(deleteScore(db, 'ALICE', 'g')).toBe(true);
+  });
+
+  test('opening a database from a newer schema version never downgrades user_version', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'tw-db-'));
+    try {
+      const path = join(dir, 'scores.db');
+      openDb(path).raw.close();
+      const raw = new DatabaseSync(path);
+      raw.exec('PRAGMA user_version = 2');
+      raw.close();
+      const db = openDb(path);
+      expect((db.raw.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(2);
+      db.raw.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a fresh database is migrated to version 1', () => {
+    const db = openDb(':memory:');
+    expect((db.raw.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(1);
+  });
+
+  test('deleteSession ends only that session', () => {
+    const db = openDb(':memory:');
+    player(db, 1);
+    createSession(db, 1, 'h1', t(1));
+    createSession(db, 1, 'h2', t(2));
+    expect(deleteSession(db, 'h1')).toBe(true);
+    expect(playerForToken(db, 'h1')).toBeNull();
+    expect(playerForToken(db, 'h2')).not.toBeNull();
+    expect(deleteSession(db, 'h1')).toBe(false);
+  });
+
+  test('submitting for a deleted player stores nothing', () => {
+    const db = openDb(':memory:');
+    player(db, 1);
+    deletePlayer(db, 1);
+    expect(submitScore(db, 1, 'g', 5, AT, t(1))).toBeNull();
+    expect(db.raw.prepare('SELECT COUNT(*) AS n FROM best').get()).toEqual({ n: 0 });
   });
 });

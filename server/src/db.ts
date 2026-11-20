@@ -7,10 +7,9 @@ const SCHEMA_VERSION = 1;
 
 export function openDb(path: string): Db {
   const raw = new DatabaseSync(path);
-  raw.exec('PRAGMA foreign_keys = ON');
   const { user_version } = raw.prepare('PRAGMA user_version').get() as { user_version: number };
-  if (user_version < 1) {
-    raw.exec(`
+  // A newer schema (user_version > 1) is left as it is: never downgrade.
+  if (user_version < 1) migrate(raw, `
       CREATE TABLE players (
         id INTEGER PRIMARY KEY,
         login TEXT NOT NULL,
@@ -35,9 +34,27 @@ export function openDb(path: string): Db {
       );
       CREATE INDEX best_game_score ON best(game, score DESC, received_at);
     `);
-  }
-  raw.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
   return { raw };
+}
+
+/** Runs one migration step and sets user_version, all or nothing. */
+function migrate(raw: DatabaseSync, sql: string): void {
+  inTransaction(raw, () => {
+    raw.exec(sql);
+    raw.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
+  });
+}
+
+function inTransaction<T>(raw: DatabaseSync, fn: () => T): T {
+  raw.exec('BEGIN');
+  try {
+    const out = fn();
+    raw.exec('COMMIT');
+    return out;
+  } catch (err) {
+    raw.exec('ROLLBACK');
+    throw err;
+  }
 }
 
 export function upsertPlayer(db: Db, p: { id: number; login: string }, now: Date): { blocked: boolean } {
@@ -56,6 +73,11 @@ export function createSession(db: Db, playerId: number, tokenHash: string, now: 
   db.raw
     .prepare('INSERT INTO sessions (token_hash, player_id, created_at) VALUES (?, ?, ?)')
     .run(tokenHash, playerId, now.toISOString());
+}
+
+/** Ends one session (sign-out). Returns false if it did not exist. */
+export function deleteSession(db: Db, tokenHash: string): boolean {
+  return Number(db.raw.prepare('DELETE FROM sessions WHERE token_hash = ?').run(tokenHash).changes) > 0;
 }
 
 export function playerForToken(db: Db, tokenHash: string): { id: number; login: string; blocked: boolean } | null {
@@ -81,7 +103,7 @@ function rankOf(db: Db, game: string, score: number, receivedAt: string): number
 
 export function submitScore(
   db: Db, playerId: number, game: string, score: number, at: string, now: Date,
-): { best: number; rank: number } {
+): { best: number; rank: number } | null {
   const ts = now.toISOString();
   const cur = db.raw
     .prepare('SELECT score, received_at FROM best WHERE player_id = ? AND game = ?')
@@ -89,9 +111,14 @@ export function submitScore(
   let best: number;
   let receivedAt: string;
   if (!cur) {
-    db.raw
-      .prepare('INSERT INTO best (player_id, game, score, at, received_at, submissions) VALUES (?, ?, ?, ?, ?, 1)')
-      .run(playerId, game, score, at, ts);
+    // Only for a player that still exists: DELETE /v1/me may have run since the session was checked.
+    const res = db.raw
+      .prepare(
+        `INSERT INTO best (player_id, game, score, at, received_at, submissions)
+         SELECT ?, ?, ?, ?, ?, 1 WHERE EXISTS (SELECT 1 FROM players WHERE id = ?)`,
+      )
+      .run(playerId, game, score, at, ts, playerId);
+    if (Number(res.changes) === 0) return null;
     best = score;
     receivedAt = ts;
   } else if (score > cur.score) {
@@ -137,25 +164,29 @@ export function board(
   return { top, me };
 }
 
-export function worldBests(db: Db): Record<string, { login: string; score: number }> {
+/** The top player per game; only the listed games when `games` is given. */
+export function worldBests(db: Db, games?: string[]): Record<string, { login: string; score: number }> {
+  const only = games ? `AND b.game IN (${games.map(() => '?').join(', ')})` : '';
   const rows = db.raw
     .prepare(
       `SELECT game, login, score FROM (
          SELECT b.game, p.login, b.score,
                 ROW_NUMBER() OVER (PARTITION BY b.game ORDER BY b.score DESC, b.received_at ASC, p.id ASC) AS rn
-         FROM best b JOIN players p ON p.id = b.player_id WHERE p.blocked = 0
+         FROM best b JOIN players p ON p.id = b.player_id WHERE p.blocked = 0 ${only}
        ) WHERE rn = 1`,
     )
-    .all() as { game: string; login: string; score: number }[];
+    .all(...(games ?? [])) as { game: string; login: string; score: number }[];
   const out: Record<string, { login: string; score: number }> = {};
   for (const r of rows) out[r.game] = { login: r.login, score: r.score };
   return out;
 }
 
 export function deletePlayer(db: Db, playerId: number): void {
-  db.raw.prepare('DELETE FROM sessions WHERE player_id = ?').run(playerId);
-  db.raw.prepare('DELETE FROM best WHERE player_id = ?').run(playerId);
-  db.raw.prepare('DELETE FROM players WHERE id = ?').run(playerId);
+  inTransaction(db.raw, () => {
+    db.raw.prepare('DELETE FROM sessions WHERE player_id = ?').run(playerId);
+    db.raw.prepare('DELETE FROM best WHERE player_id = ?').run(playerId);
+    db.raw.prepare('DELETE FROM players WHERE id = ?').run(playerId);
+  });
 }
 
 // GitHub logins are case-insensitive, so the admin lookups compare with lower().
