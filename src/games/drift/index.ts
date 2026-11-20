@@ -5,7 +5,7 @@ import {
   gripFor, headingAngle, isDrifting, rotateHeading, speedForCoins, TICK_MS, turnToward,
 } from './physics';
 
-export const TRAIL_LEN = 12;
+export const TRAIL_LEN = 6;
 
 export interface DriftState {
   x: number; y: number;      // float position, in cells
