@@ -1,7 +1,7 @@
 import { GAME_HEIGHT, GAME_WIDTH, type Game, type GameContext, type Key, type Screen } from '../../core/types';
-import { generatePillars, isBlocked, pointRect, spawnCoin, START, type Point, type Rect } from './arena';
+import { generatePillars, inRect, isWall, pointRect, spawnCoin, START, type Point, type Rect } from './arena';
 import {
-  addEffect, DURATION, gripNow, modifiers, tickEffects, type Effect,
+  addEffect, DURATION, gripNow, hasEffect, modifiers, removeEffect, tickEffects, type Effect,
 } from './effects';
 import {
   headingAngle, isDrifting, rotateHeading, speedForCoins, TICK_MS, turnToward,
@@ -12,6 +12,7 @@ import {
 
 export const TRAIL_LEN = 6;
 const BASE_COIN = 10;
+export const RAIN_COUNT = 5;
 
 export interface DriftState {
   x: number; y: number;      // float position, in cells
@@ -20,6 +21,7 @@ export interface DriftState {
   lastTurn: 1 | -1;          // last steering press: 1 = right (clockwise), -1 = left
   coins: number;
   coin: Point;
+  extraCoins: Point[];       // Coin rain extras
   pillars: Rect[];
   trail: Point[];            // most recent cell first, at most TRAIL_LEN, no consecutive duplicates
   crashed: boolean;
@@ -43,7 +45,7 @@ function init(ctx: GameContext): DriftState {
   const pillars = generatePillars(ctx);
   return {
     x: START.x, y: START.y, heading: 0, travel: 0, lastTurn: 1, coins: 0,
-    coin: spawnCoin(START, pillars, ctx), pillars, trail: [], crashed: false,
+    coin: spawnCoin(START, pillars, ctx), extraCoins: [], pillars, trail: [], crashed: false,
     points: 0, scheduleCoins: 0, nextPowerAt: nextPowerGap(ctx), powerUp: null, effects: [], tick: 0,
   };
 }
@@ -55,26 +57,38 @@ function onKey(state: DriftState, key: Key): DriftState {
   return state;
 }
 
-/** Applies a collected power-up. Rain and shield only add their timer for now; shuffle does nothing yet. */
+/** Applies a collected power-up. Shuffle does nothing yet. */
 export function applyPower(state: DriftState, kind: PowerKind, ctx: GameContext): DriftState {
   if (kind === 'mystery') {
     const outcome = resolveMystery(ctx);
     return outcome === 'slick' ? { ...state, effects: addEffect(state.effects, 'slick') } : applyPower(state, outcome, ctx);
   }
   if (kind === 'shuffle') return state;
+  if (kind === 'rain' && !hasEffect(state.effects, 'rain')) {
+    const speed = speedForCoins(state.coins) * modifiers(state.effects).speedMul;
+    const extras: Point[] = [];
+    for (let i = 0; i < RAIN_COUNT; i++) {
+      const avoid = [...spawnAvoid(state), ...extras.map(pointRect)];
+      extras.push(spawnCoin(cellOf(state), state.pillars, ctx, { speed, avoid }));
+    }
+    return { ...state, extraCoins: extras, effects: addEffect(state.effects, kind) };
+  }
   return { ...state, effects: addEffect(state.effects, kind) };
 }
 
 /** Cells a new coin or power-up must not land on. */
 export function spawnAvoid(state: DriftState): Rect[] {
-  const rects = [pointRect(state.coin)];
+  const rects = [pointRect(state.coin), ...state.extraCoins.map(pointRect)];
   if (state.powerUp) rects.push(pointRect(state.powerUp.at));
   return rects;
 }
 
 function update(state: DriftState, ctx: GameContext): DriftState {
   if (state.crashed) return state;
-  let st: DriftState = { ...state, effects: tickEffects(state.effects) };
+  const effects = tickEffects(state.effects);
+  let st: DriftState = {
+    ...state, effects, extraCoins: hasEffect(effects, 'rain') ? state.extraCoins : [],
+  };
   const speed = speedForCoins(st.coins) * modifiers(st.effects).speedMul;
   const travel = turnToward(st.travel, headingAngle(st.heading), gripNow(speed, st.effects, false), st.lastTurn);
   const dx = Math.cos(travel) * speed * TICK_MS / 1000;
@@ -87,7 +101,19 @@ function update(state: DriftState, ctx: GameContext): DriftState {
     x += dx / n;
     y += dy / n;
     const cell = cellOf({ x, y });
-    if (isBlocked(cell, st.pillars)) { crashed = true; break; }
+    if (isWall(cell)) { crashed = true; break; }
+    const hit = st.pillars.find((r) => inRect(cell, r));
+    if (hit) {
+      if (!hasEffect(st.effects, 'shield')) { crashed = true; break; }
+      st = { ...st, pillars: st.pillars.filter((r) => r !== hit), effects: removeEffect(st.effects, 'shield') };
+    }
+    const extra = st.extraCoins.findIndex((p) => samePoint(p, cell));
+    if (extra >= 0) {
+      st = {
+        ...st, coins: st.coins + 1, points: st.points + BASE_COIN * modifiers(st.effects).coinMul,
+        extraCoins: st.extraCoins.filter((_, j) => j !== extra),
+      };
+    }
     if (samePoint(cell, st.coin)) {
       const { speedMul, coinMul } = modifiers(st.effects);
       const coins = st.coins + 1;
@@ -152,6 +178,7 @@ function draw(state: DriftState, screen: Screen): void {
     for (const t of state.trail) if (!samePoint(t, car)) screen.put(t.x, t.y, '·', 'gray');
   }
   screen.put(state.coin.x, state.coin.y, '●', 'yellow');
+  for (const e of state.extraCoins) screen.put(e.x, e.y, '●', 'yellow');
   const p = state.powerUp;
   if (p && (p.ticksLeft > POWER_BLINK || Math.floor(state.tick / 4) % 2 === 0)) {
     screen.put(p.at.x, p.at.y, POWER_LOOK[p.kind].ch, POWER_LOOK[p.kind].color);

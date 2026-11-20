@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { createRandom } from '../../core/random';
 import type { GameContext } from '../../core/types';
-import { clearanceFor, isBlocked, type Point } from './arena';
+import { clearanceFor, isBlocked, type Point, type Rect } from './arena';
 import { angleDiff, COINS_TO_MAX, GRIP_SLOW, headingAngle, speedForCoins, START_SPEED, TICK_MS } from './physics';
 import { hasEffect } from './effects';
 import { POWER_LIFE } from './powerups';
-import drift, { cellOf, TRAIL_LEN, type DriftState } from './index';
+import drift, { cellOf, RAIN_COUNT, TRAIL_LEN, type DriftState } from './index';
 
 const ctx = (seed = 1): GameContext => ({ random: createRandom(seed), elapsedMs: 0 });
 const FAR_COIN: Point = { x: 2, y: 2 };
@@ -291,5 +291,80 @@ describe('drift', () => {
     expect(drifting.filter((l) => l.includes(',·,gray'))).toHaveLength(3);
     const straight = capture({ ...base, heading: 0, travel: 0, trail });
     expect(straight.some((l) => l.includes('·'))).toBe(false);
+  });
+
+  describe('coin rain and shield', () => {
+    const rainAhead = (over: Partial<DriftState> = {}) =>
+      open({ x: 30.6, nextPowerAt: null, powerUp: { kind: 'rain', at: { x: 31, y: 10 }, ticksLeft: 100 }, ...over });
+
+    it('coin rain spawns 5 extras on legal distinct cells; they vanish when rain ends', () => {
+      const s = drift.update(rainAhead({ pillars: [{ x: 40, y: 5, w: 3, h: 3 }] }), ctx());
+      expect(hasEffect(s.effects, 'rain')).toBe(true);
+      expect(s.extraCoins).toHaveLength(RAIN_COUNT);
+      const keys = new Set(s.extraCoins.map((p) => `${p.x},${p.y}`));
+      expect(keys.size).toBe(RAIN_COUNT);
+      for (const p of s.extraCoins) {
+        expect(isBlocked(p, s.pillars)).toBe(false);
+        expect(p).not.toEqual(s.coin);
+      }
+      const ended = drift.update({ ...s, x: 5, y: 5, travel: 0, effects: [{ kind: 'rain', ticksLeft: 1 }] }, ctx());
+      expect(hasEffect(ended.effects, 'rain')).toBe(false);
+      expect(ended.extraCoins).toEqual([]);
+    });
+
+    it('extra coins add points and speed but not scheduleCoins', () => {
+      const s = drift.update(open({
+        x: 30.6, coins: 3, scheduleCoins: 3, nextPowerAt: null,
+        extraCoins: [{ x: 31, y: 10 }, { x: 50, y: 15 }], effects: [{ kind: 'rain', ticksLeft: 100 }],
+      }), ctx());
+      expect(s.coins).toBe(4);
+      expect(s.points).toBe(10);
+      expect(s.scheduleCoins).toBe(3);
+      expect(s.extraCoins).toEqual([{ x: 50, y: 15 }]);
+    });
+
+    it('taking coin rain while active resets the timer without new extras', () => {
+      const s = drift.update(rainAhead({
+        effects: [{ kind: 'rain', ticksLeft: 20 }], extraCoins: [{ x: 50, y: 15 }],
+      }), ctx());
+      expect(s.effects.find((e) => e.kind === 'rain')!.ticksLeft).toBeGreaterThan(20);
+      expect(s.extraCoins).toEqual([{ x: 50, y: 15 }]);
+    });
+
+    const shield = [{ kind: 'shield' as const, ticksLeft: 100 }];
+
+    it('shield destroys the pillar it hits, once', () => {
+      const s = drift.update(open({ x: 31.6, pillars: [{ x: 32, y: 10, w: 1, h: 1 }], effects: shield }), ctx());
+      expect(s.crashed).toBe(false);
+      expect(s.pillars).toHaveLength(0);
+      expect(hasEffect(s.effects, 'shield')).toBe(false);
+    });
+
+    it('shield removes the whole pillar, not one cell', () => {
+      const other: Rect = { x: 10, y: 3, w: 1, h: 1 };
+      const s = drift.update(open({ x: 31.6, pillars: [{ x: 32, y: 9, w: 3, h: 3 }, other], effects: shield }), ctx());
+      expect(s.crashed).toBe(false);
+      expect(s.pillars).toEqual([other]);
+    });
+
+    it('shield does not save you from walls', () => {
+      const s = drift.update(open({ x: 58.6, effects: shield }), ctx());
+      expect(s.crashed).toBe(true);
+    });
+
+    it('after the shield is used, a second pillar in the same tick crashes', () => {
+      const s = drift.update(open({
+        coins: 20, effects: [...shield, { kind: 'nitro', ticksLeft: 100 }],
+        pillars: [{ x: 31, y: 10, w: 1, h: 1 }, { x: 32, y: 10, w: 1, h: 1 }],
+      }), ctx());
+      expect(s.crashed).toBe(true);
+      expect(s.pillars).toHaveLength(1);
+      expect(hasEffect(s.effects, 'shield')).toBe(false);
+    });
+
+    it('draws extra coins as yellow dots', () => {
+      const calls = capture({ ...drift.init(ctx()), extraCoins: [{ x: 33, y: 4 }] });
+      expect(calls).toContain('33,4,●,yellow');
+    });
   });
 });
