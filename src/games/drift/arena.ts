@@ -40,22 +40,41 @@ const grown = (r: Rect, n: number): Rect => ({ x: r.x - n, y: r.y - n, w: r.w + 
 const randInt = (ctx: GameContext, min: number, max: number): number =>
   min + Math.floor(ctx.random() * (max - min + 1));
 
+const PILLAR_SIZE = { w: [2, 4] as [number, number], h: [1, 2] as [number, number] };
+
+/** Random rect 2 cells clear of the walls and of `existing`, never touching `avoid`; null if no spot found. */
+export function placeRect(
+  existing: Rect[], avoid: Rect[], size: { w: [number, number]; h: [number, number] }, ctx: GameContext,
+  attempts = ATTEMPTS_PER_PILLAR,
+): Rect | null {
+  for (let a = 0; a < attempts; a++) {
+    const w = randInt(ctx, size.w[0], size.w[1]);
+    const h = randInt(ctx, size.h[0], size.h[1]);
+    const cand: Rect = { x: randInt(ctx, 3, 57 - w), y: randInt(ctx, 3, 17 - h), w, h };
+    if (avoid.some((r) => intersects(cand, r))) continue;
+    if (existing.some((q) => intersects(grown(cand, 2), q))) continue;
+    return cand;
+  }
+  return null;
+}
+
+/** A 5x5 box around the car cell plus the 8 cells ahead along `travel`. */
+export function carZone(x: number, y: number, travel: number): Rect[] {
+  const zone: Rect[] = [{ x: Math.round(x) - 2, y: Math.round(y) - 2, w: 5, h: 5 }];
+  for (let i = 1; i <= 8; i++) {
+    zone.push({
+      x: Math.round(x + i * Math.cos(travel)), y: Math.round(y + i * 0.5 * Math.sin(travel)), w: 1, h: 1,
+    });
+  }
+  return zone;
+}
+
 function tryPlace(count: number, ctx: GameContext): Rect[] | null {
   const pillars: Rect[] = [];
   while (pillars.length < count) {
-    let placed = false;
-    for (let a = 0; a < ATTEMPTS_PER_PILLAR && !placed; a++) {
-      const w = randInt(ctx, 2, 4);
-      const h = randInt(ctx, 1, 2);
-      const x = randInt(ctx, 3, 56 - w + 1);
-      const y = randInt(ctx, 3, 16 - h + 1);
-      const cand: Rect = { x, y, w, h };
-      if (intersects(cand, SAFE_ZONE)) continue;
-      if (pillars.some((q) => intersects(grown(cand, 2), q))) continue;
-      pillars.push(cand);
-      placed = true;
-    }
-    if (!placed) return null;
+    const r = placeRect(pillars, [SAFE_ZONE], PILLAR_SIZE, ctx);
+    if (!r) return null;
+    pillars.push(r);
   }
   return pillars;
 }

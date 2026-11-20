@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { createRandom } from '../../core/random';
 import type { GameContext } from '../../core/types';
-import { clearanceFor, isBlocked, type Point, type Rect } from './arena';
+import { clearanceFor, inRect, isBlocked, spawnCoin, type Point, type Rect } from './arena';
+import { MAX_OIL, MAX_PILLARS, WARN_TICKS } from './obstacles';
 import { angleDiff, COINS_TO_MAX, GRIP_SLOW, headingAngle, speedForCoins, START_SPEED, TICK_MS } from './physics';
 import { hasEffect } from './effects';
 import { POWER_LIFE } from './powerups';
-import drift, { cellOf, RAIN_COUNT, TRAIL_LEN, type DriftState } from './index';
+import drift, { applyPower, cellOf, RAIN_COUNT, spawnAvoid, TRAIL_LEN, type DriftState } from './index';
 
 const ctx = (seed = 1): GameContext => ({ random: createRandom(seed), elapsedMs: 0 });
 const FAR_COIN: Point = { x: 2, y: 2 };
@@ -366,5 +367,117 @@ describe('drift', () => {
       const calls = capture({ ...drift.init(ctx()), extraCoins: [{ x: 33, y: 4 }] });
       expect(calls).toContain('33,4,●,yellow');
     });
+  });
+});
+
+describe('drift growing arena', () => {
+  const inAny = (p: Point, rects: Rect[]) => rects.some((r) => inRect(p, r));
+  const takeCoin = (over: Partial<DriftState> = {}) => open({ x: 30.6, y: 10, coin: { x: 31, y: 10 }, ...over });
+
+  it('every 5th schedule coin queues an obstacle that is harmless while pending', () => {
+    const before = drift.update(takeCoin({ scheduleCoins: 3, coins: 3 }), ctx());
+    expect(before.pending).toHaveLength(0);
+    const s = drift.update(takeCoin({ scheduleCoins: 4, coins: 4 }), ctx());
+    expect(s.scheduleCoins).toBe(5);
+    expect(s.pending).toHaveLength(1);
+    expect(s.pending[0].ticksLeft).toBe(WARN_TICKS - 1); // queued, then counted down in the same update
+    const driven = drift.update(open({ pending: [{ kind: 'pillar', rect: { x: 31, y: 9, w: 3, h: 3 }, ticksLeft: 30 }] }), ctx());
+    expect(driven.crashed).toBe(false);
+    expect(driven.pending).toHaveLength(1);
+  });
+
+  it('Coin-rain extras do not advance the obstacle schedule', () => {
+    const s = drift.update(open({ x: 30.6, extraCoins: [{ x: 31, y: 10 }], scheduleCoins: 4, coins: 4 }), ctx());
+    expect(s.scheduleCoins).toBe(4);
+    expect(s.pending).toHaveLength(0);
+  });
+
+  it('pending obstacle turns solid after WARN_TICKS', () => {
+    const rect: Rect = { x: 50, y: 15, w: 3, h: 1 };
+    let s = open({ pending: [{ kind: 'pillar', rect, ticksLeft: WARN_TICKS }] });
+    for (let i = 0; i < WARN_TICKS; i++) {
+      expect(s.pending).toHaveLength(1);
+      expect(s.pillars).toHaveLength(0);
+      s = drift.update({ ...s, x: 6, y: 10, travel: 0, heading: 0 }, ctx());
+    }
+    expect(s.pending).toHaveLength(0);
+    expect(s.pillars).toEqual([rect]);
+    const o = drift.update(open({ pending: [{ kind: 'oil', rect, ticksLeft: 1 }] }), ctx());
+    expect(o.oil).toEqual([rect]);
+    expect(o.pillars).toHaveLength(0);
+  });
+
+  it('pending obstacle waits while the car is in its zone', () => {
+    const p = { kind: 'pillar' as const, rect: { x: 33, y: 10, w: 3, h: 1 }, ticksLeft: 0 };
+    const s = drift.update(open({ pending: [p] }), ctx());
+    expect(s.pending).toHaveLength(1);
+    expect(s.pillars).toHaveLength(0);
+  });
+
+  it('oil drops grip to LOW_GRIP; grip effect overrides it', () => {
+    const oil: Rect[] = [{ x: 25, y: 8, w: 10, h: 5 }];
+    const turn = (over: Partial<DriftState>) => drift.update(open({ heading: 2, ...over }), ctx()).travel;
+    const plain = turn({});
+    const slick = turn({ effects: [{ kind: 'slick', ticksLeft: 100 }] });
+    expect(turn({ oil })).toBeCloseTo(slick, 10);
+    expect(turn({ oil })).toBeLessThan(plain);
+    const grip = [{ kind: 'grip' as const, ticksLeft: 100 }];
+    expect(turn({ oil, effects: grip })).toBeCloseTo(turn({ effects: grip }), 10);
+  });
+
+  it('coins and power-ups never spawn on oil or pending rects', () => {
+    const oil: Rect = { x: 3, y: 3, w: 54, h: 6 };
+    const pend: Rect = { x: 3, y: 11, w: 54, h: 6 };
+    const st = open({ oil: [oil], pending: [{ kind: 'pillar', rect: pend, ticksLeft: 30 }] });
+    expect(spawnAvoid(st)).toEqual(expect.arrayContaining([oil, pend]));
+    for (let seed = 1; seed <= 30; seed++) {
+      const n = drift.update({ ...st, x: 30.6, y: 10, coin: { x: 31, y: 10 }, nextPowerAt: 0 }, ctx(seed));
+      expect(inAny(n.coin, [oil, pend])).toBe(false);
+      if (n.powerUp) expect(inAny(n.powerUp.at, [oil, pend])).toBe(false);
+    }
+  });
+
+  it('crowded arena: 60 coins of growth never throws and spawns stay legal', () => {
+    const c = ctx(7);
+    let st = drift.init(c);
+    for (let i = 0; i < 60; i++) {
+      if (i === 30) st = applyPower(st, 'rain', c);
+      const blockers = [...st.oil, ...st.pending.map((p) => p.rect)];
+      let spot: Point | null = null;
+      for (let t = 0; t < 30 && !spot; t++) {
+        const cand = spawnCoin({ x: 0, y: 0 }, st.pillars, c, { avoid: [...blockers, ...spawnAvoid(st)] });
+        const ahead = { x: cand.x + 1, y: cand.y };
+        if (!isBlocked(ahead, st.pillars) && !inAny(ahead, blockers)) spot = cand;
+      }
+      expect(spot).not.toBeNull();
+      st = {
+        ...st, x: spot!.x + 0.49, y: spot!.y, heading: 0, travel: 0, crashed: false,
+        coin: { x: spot!.x + 1, y: spot!.y },
+        extraCoins: st.extraCoins.filter((e) => !(e.x === spot!.x && e.y === spot!.y)),
+      };
+      st = drift.update(st, c);
+      expect(st.pillars.length).toBeLessThanOrEqual(MAX_PILLARS);
+      expect(st.oil.length).toBeLessThanOrEqual(MAX_OIL);
+      const spawned = [st.coin, ...st.extraCoins, ...(st.powerUp ? [st.powerUp.at] : [])];
+      for (const p of spawned) {
+        expect(isBlocked(p, st.pillars)).toBe(false);
+        expect(inAny(p, st.oil)).toBe(false);
+      }
+    }
+    expect(st.scheduleCoins).toBeGreaterThanOrEqual(50);
+  });
+
+  it('draws pending blinking in gray and solid oil in blue', () => {
+    const base = open({
+      pending: [{ kind: 'pillar', rect: { x: 10, y: 5, w: 1, h: 1 }, ticksLeft: 9 }, { kind: 'oil', rect: { x: 12, y: 5, w: 1, h: 1 }, ticksLeft: 9 }],
+      oil: [{ x: 14, y: 5, w: 1, h: 1 }],
+    });
+    const on = capture({ ...base, tick: 0 });
+    expect(on).toContain('10,5,░,gray');
+    expect(on).toContain('12,5,≈,gray');
+    expect(on).toContain('14,5,≈,blue');
+    const off = capture({ ...base, tick: 4 });
+    expect(off).not.toContain('10,5,░,gray');
+    expect(off).toContain('14,5,≈,blue');
   });
 });

@@ -1,8 +1,9 @@
 import { GAME_HEIGHT, GAME_WIDTH, type Game, type GameContext, type Key, type Screen } from '../../core/types';
-import { generatePillars, inRect, isWall, pointRect, spawnCoin, START, type Point, type Rect } from './arena';
+import { carZone, generatePillars, inRect, isWall, pointRect, spawnCoin, START, type Point, type Rect } from './arena';
 import {
   addEffect, DURATION, gripNow, hasEffect, modifiers, removeEffect, tickEffects, type Effect,
 } from './effects';
+import { newObstacle, OBSTACLE_EVERY, type Pending } from './obstacles';
 import {
   headingAngle, isDrifting, rotateHeading, speedForCoins, TICK_MS, turnToward,
 } from './physics';
@@ -23,6 +24,8 @@ export interface DriftState {
   coin: Point;
   extraCoins: Point[];       // Coin rain extras
   pillars: Rect[];
+  oil: Rect[];               // solid oil patches (low grip)
+  pending: Pending[];        // blinking warnings that turn solid later
   trail: Point[];            // most recent cell first, at most TRAIL_LEN, no consecutive duplicates
   crashed: boolean;
   points: number;            // score
@@ -45,7 +48,7 @@ function init(ctx: GameContext): DriftState {
   const pillars = generatePillars(ctx);
   return {
     x: START.x, y: START.y, heading: 0, travel: 0, lastTurn: 1, coins: 0,
-    coin: spawnCoin(START, pillars, ctx), extraCoins: [], pillars, trail: [], crashed: false,
+    coin: spawnCoin(START, pillars, ctx), extraCoins: [], pillars, oil: [], pending: [], trail: [], crashed: false,
     points: 0, scheduleCoins: 0, nextPowerAt: nextPowerGap(ctx), powerUp: null, effects: [], tick: 0,
   };
 }
@@ -80,6 +83,7 @@ export function applyPower(state: DriftState, kind: PowerKind, ctx: GameContext)
 export function spawnAvoid(state: DriftState): Rect[] {
   const rects = [pointRect(state.coin), ...state.extraCoins.map(pointRect)];
   if (state.powerUp) rects.push(pointRect(state.powerUp.at));
+  rects.push(...state.oil, ...state.pending.map((p) => p.rect));
   return rects;
 }
 
@@ -90,7 +94,7 @@ function update(state: DriftState, ctx: GameContext): DriftState {
     ...state, effects, extraCoins: hasEffect(effects, 'rain') ? state.extraCoins : [],
   };
   const speed = speedForCoins(st.coins) * modifiers(st.effects).speedMul;
-  const travel = turnToward(st.travel, headingAngle(st.heading), gripNow(speed, st.effects, false), st.lastTurn);
+  const travel = turnToward(st.travel, headingAngle(st.heading), gripNow(speed, st.effects, st.oil.some((r) => inRect(cellOf(st), r))), st.lastTurn);
   const dx = Math.cos(travel) * speed * TICK_MS / 1000;
   const dy = Math.sin(travel) * speed * TICK_MS / 1000 * 0.5;
   const n = Math.max(1, Math.ceil(Math.max(Math.abs(dx), Math.abs(dy))));
@@ -119,6 +123,11 @@ function update(state: DriftState, ctx: GameContext): DriftState {
       const coins = st.coins + 1;
       st = { ...st, coins, scheduleCoins: st.scheduleCoins + 1, points: st.points + BASE_COIN * coinMul };
       st = { ...st, coin: spawnCoin(cell, st.pillars, ctx, { speed: speedForCoins(coins) * speedMul, avoid: spawnAvoid(st) }) };
+      if (st.scheduleCoins % OBSTACLE_EVERY === 0) {
+        const avoid = [...carZone(x, y, travel), ...spawnAvoid(st)];
+        const ob = newObstacle({ pillars: st.pillars, oil: st.oil, pending: st.pending, avoid, coins: st.coins }, ctx);
+        if (ob) st = { ...st, pending: [...st.pending, ob] };
+      }
     }
     if (st.powerUp && samePoint(cell, st.powerUp.at)) {
       st = applyPower(st, st.powerUp.kind, ctx);
@@ -141,7 +150,25 @@ function update(state: DriftState, ctx: GameContext): DriftState {
     const at = spawnCoin(cellOf(st), st.pillars, ctx, { speed: spawnSpeed, avoid: spawnAvoid(st) });
     st = { ...st, powerUp: { kind: pickPower(ctx), at, ticksLeft: POWER_LIFE }, nextPowerAt: null };
   }
-  return { ...st, tick: st.tick + 1 };
+  return { ...resolvePending(st), tick: st.tick + 1 };
+}
+
+const intersectsRect = (a: Rect, b: Rect): boolean =>
+  a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+
+/** Counts pending obstacles down; at 0 they turn solid unless the car's zone is on them. */
+function resolvePending(st: DriftState): DriftState {
+  if (st.pending.length === 0) return st;
+  const zone = carZone(st.x, st.y, st.travel);
+  const pending: Pending[] = [];
+  const pillars = [...st.pillars];
+  const oil = [...st.oil];
+  for (const p of st.pending) {
+    const ticksLeft = Math.max(0, p.ticksLeft - 1);
+    if (ticksLeft > 0 || zone.some((z) => intersectsRect(z, p.rect))) pending.push({ ...p, ticksLeft });
+    else (p.kind === 'pillar' ? pillars : oil).push(p.rect);
+  }
+  return { ...st, pending, pillars, oil };
 }
 
 const READOUT_MAX_X = 57;
@@ -161,6 +188,11 @@ function drawReadout(effects: Effect[], screen: Screen): void {
   }
 }
 
+function fillRect(screen: Screen, r: Rect, ch: string, color: 'blue' | 'gray'): void {
+  for (let y = r.y; y < r.y + r.h; y++)
+    for (let x = r.x; x < r.x + r.w; x++) screen.put(x, y, ch, color);
+}
+
 function draw(state: DriftState, screen: Screen): void {
   const W = GAME_WIDTH - 1, H = GAME_HEIGHT - 1;
   for (let x = 1; x < W; x++) { screen.put(x, 0, '─', 'gray'); screen.put(x, H, '─', 'gray'); }
@@ -171,6 +203,11 @@ function draw(state: DriftState, screen: Screen): void {
   for (const r of state.pillars) {
     for (let y = r.y; y < r.y + r.h; y++)
       for (let x = r.x; x < r.x + r.w; x++) screen.put(x, y, '█', 'blue');
+  }
+
+  for (const r of state.oil) fillRect(screen, r, '≈', 'blue');
+  if (Math.floor(state.tick / 4) % 2 === 0) {
+    for (const p of state.pending) fillRect(screen, p.rect, p.kind === 'pillar' ? '░' : '≈', 'gray');
   }
 
   const car = cellOf(state);

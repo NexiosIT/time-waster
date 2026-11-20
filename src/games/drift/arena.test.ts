@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createRandom } from '../../core/random';
 import type { GameContext } from '../../core/types';
 import {
-  MIN_COIN_DIST, SAFE_ZONE, START, clearanceFor, generatePillars, inRect, isBlocked, isWall, spawnCoin,
+  MIN_COIN_DIST, SAFE_ZONE, START, clearanceFor, carZone, generatePillars, inRect, isBlocked, isWall, placeRect, spawnCoin,
   type Rect,
 } from './arena';
 import { MAX_SPEED, START_SPEED } from './physics';
@@ -121,5 +121,39 @@ describe('drift arena', () => {
       expect(avoid.some((r) => inRect(coin, r))).toBe(false);
       expect(isBlocked(coin, [])).toBe(false);
     }
+  });
+
+  it('placeRect respects gap, walls and avoid', () => {
+    const existing: Rect[] = [{ x: 30, y: 8, w: 4, h: 2 }];
+    for (let seed = 1; seed <= 100; seed++) {
+      const r = placeRect(existing, [SAFE_ZONE], { w: [3, 5], h: [1, 2] }, ctx(seed));
+      expect(r).not.toBeNull();
+      if (!r) continue;
+      expect(r.w).toBeGreaterThanOrEqual(3);
+      expect(r.w).toBeLessThanOrEqual(5);
+      expect(r.h).toBeGreaterThanOrEqual(1);
+      expect(r.h).toBeLessThanOrEqual(2);
+      expect(r.x).toBeGreaterThanOrEqual(3);
+      expect(r.y).toBeGreaterThanOrEqual(3);
+      expect(r.x + r.w).toBeLessThanOrEqual(57);
+      expect(r.y + r.h).toBeLessThanOrEqual(17);
+      expect(intersects(grow(r, 2), existing[0])).toBe(false);
+      expect(intersects(r, SAFE_ZONE)).toBe(false);
+    }
+  });
+
+  it('placeRect returns null when there is no room', () => {
+    expect(placeRect([], [{ x: 0, y: 0, w: 60, h: 20 }], { w: [2, 2], h: [1, 1] }, ctx(), 50)).toBeNull();
+  });
+
+  it('carZone covers the car and 8 cells ahead', () => {
+    const zone = carZone(30, 10, 0);
+    const covered = (z: Rect[], x: number, y: number) => z.some((r) => inRect({ x, y }, r));
+    for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) expect(covered(zone, 30 + dx, 10 + dy)).toBe(true);
+    for (let i = 1; i <= 8; i++) expect(covered(zone, 30 + i, 10)).toBe(true);
+    expect(covered(zone, 39, 10)).toBe(false);
+    const down = carZone(30, 10, Math.PI / 2);
+    expect(covered(down, 30, 14)).toBe(true); // 8 * 0.5 = 4 rows ahead
+    expect(covered(down, 30, 15)).toBe(false);
   });
 });
