@@ -1,6 +1,8 @@
 import type { ClaudeEvent } from './events';
 
 export const TASK_MAX_AGE_MS = 30 * 60_000;
+// How long `overdue` lasts past the estimate before the task is dropped (an interrupt may never send `done`).
+export const OVERDUE_GRACE_MS = 10 * 60_000;
 
 export type TaskView =
   | { state: 'none' }
@@ -37,6 +39,7 @@ export class TaskClock {
     if (!k) return { state: 'none' };
     if (k.estimateMs === null) return nowMs - k.startMs > TASK_MAX_AGE_MS ? { state: 'none' } : { state: 'estimating' };
     const leftMs = k.startMs + k.estimateMs - nowMs;
+    if (-leftMs > OVERDUE_GRACE_MS) return { state: 'none' };
     return leftMs > 0 ? { state: 'running', leftMs } : { state: 'overdue' };
   }
 }

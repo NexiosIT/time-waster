@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { TaskClock, TASK_MAX_AGE_MS } from './task';
+import { TaskClock, TASK_MAX_AGE_MS, OVERDUE_GRACE_MS } from './task';
 import type { ClaudeEvent } from './events';
 
 const T0 = Date.parse('2026-01-01T00:00:00.000Z');
@@ -18,7 +18,6 @@ describe('TaskClock', () => {
     expect(c.view(T0 + 1000)).toEqual({ state: 'estimating' });
     c.apply(est(1000, 5));
     expect(c.view(T0)).toEqual({ state: 'running', leftMs: 300000 });
-    c.apply(start(0)); // no-op
   });
   it('matches the spec numbers when estimate is at start', () => {
     const c = new TaskClock();
@@ -69,5 +68,21 @@ describe('TaskClock', () => {
     const v = c.view(T0 + 1000);
     c.apply(start(0));
     expect(c.view(T0 + 1000)).toEqual(v);
+  });
+  it('overdue expires to none after the grace period', () => {
+    expect(OVERDUE_GRACE_MS).toBe(10 * 60_000);
+    const c = new TaskClock();
+    c.apply(start(0));
+    c.apply(est(0, 5));
+    expect(c.view(T0 + 300000 + 1)).toEqual({ state: 'overdue' });
+    expect(c.view(T0 + 300000 + OVERDUE_GRACE_MS)).toEqual({ state: 'overdue' });
+    expect(c.view(T0 + 300000 + OVERDUE_GRACE_MS + 1)).toEqual({ state: 'none' });
+  });
+  it('an older start replayed after done leaves none', () => {
+    const c = new TaskClock();
+    c.apply(start(100));
+    c.apply(done(200));
+    c.apply(start(50));
+    expect(c.view(T0 + 300)).toEqual({ state: 'none' });
   });
 });
