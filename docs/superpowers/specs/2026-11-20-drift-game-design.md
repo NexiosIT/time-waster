@@ -48,8 +48,8 @@ long, barely-controlled slide later in the run.
 
 1. **Continuous physics, grid display (chosen).** Float position, heading and velocity;
    each tick the velocity direction turns toward the heading at a rate that falls with
-   speed. Collisions and pickups are checked on grid cells. Smooth, natural slides and a
-   smooth speed ramp; needs fixed-seed tests and care with sub-cell motion.
+   speed. Collisions and pickups are checked on grid cells. Smooth, natural slides, and
+   speed can rise in any size of step; needs fixed-seed tests and care with sub-cell motion.
 2. **Pure grid rules.** The car moves one cell per step and keeps the old direction for
    N cells after a turn. Simpler and fully predictable, but a slide reads as a lane
    change rather than a drift, and speed can only rise in steps.
