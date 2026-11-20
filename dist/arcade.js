@@ -3559,6 +3559,221 @@ var tankDuel = {
 };
 var tank_duel_default = tankDuel;
 
+// src/games/word-guess/words.ts
+var WORDS = `
+about above actor acute admit adult after again agent agree ahead alarm album alert
+alike alive allow alone along alter among angel anger angle angry ankle arena argue
+arise armor arrow aside asset audio avoid awake award aware awful bacon badge baker
+basic basin beach beard beast begin being belly below bench berry birth black blade
+blame blank blast blaze bleed blend bless blind block blood bloom board boast bonus
+boost booth bound brain brake brand brave bread break brick bride brief bring broad
+broke brown brush build built bunch burst cabin cable camel canal candy canoe cargo
+carry catch cause chain chair chalk charm chart chase cheat check cheek cheer chess
+chest chief child chill choir chord civil claim class clean clear clerk click cliff
+climb clock close cloth cloud clown coach coast cocoa color coral couch cough could
+count court cover crack craft crane crash crawl crazy cream crime crowd crown crude
+cruel crumb crust curve cycle daily dairy dance dealt death debut delay dense diary
+dirty disco ditch dizzy dodge doing donor doubt dough dozen draft drain drama drank
+drawn dream dress dried drift drill drink drive drone drown dwarf eager eagle early
+earth eaten eight elbow elder elect enemy enjoy enter entry equal error essay event
+every exact exist extra fable faint fairy faith false fancy fatal fault feast fence
+ferry fever fiber field fifth fifty fight final first flake flame flash fleet flesh
+float flock flood floor flour fluid flush focus force forge forth forty forum found
+frame fresh front frost froze fruit fudge fully funny gauge ghost giant given glade
+glass gleam globe glove going grace grade grain grand grant grass grave gravy great
+greed green greet grief grill grind groan guard guess guest guide guilt habit hairy
+handy harsh haste hatch haunt heart heavy hedge hello hinge hobby holly honey honor
+horse hotel hound house human humor hurry ideal image inbox index inner irony issue
+ivory jelly jewel joint jolly judge juice juicy knife knock known label labor large
+laser later laugh layer learn least leave ledge legal lemon level light limit linen
+liver local lodge lofty logic loose lorry loser lover lower loyal lucky lunar lunch
+magic major maker march match mayor medal melon mercy merit metal meter might minor
+minus mirth model money month moral motor mound mount mouse mouth movie muddy music
+naive nasty naval nerve never newly night noble noise north notch novel nurse oasis
+occur ocean offer often olive onion onset orbit order other otter ought outer owner
+ozone quack queen query quest quick quiet quilt quite quota quote radar radio raise
+rally ranch range ratio reach react ready realm rebel relax relay renew rider ridge
+rifle right rigid risky rival river roast robin robot rocky rouge rough round route
+royal rumor rural rusty sadly saint salad salon sandy sauce scale scare scarf scene
+scent score scout scrub sense serve seven shade shaft shake shall shame shark sheet
+shelf shell shift shine shiny shirt shock shore short shout shrug sight silly since
+skate skill skirt skull slate sleek slice slide smart smell smile smoke snack snake
+sneak solar solid solve sonic sorry sound south stack staff stage stain stair stake
+stale stall stand stare start state steak steal steam steel steer stern stick still
+sting stock stone stool storm story stove straw stray stuck study stuff style sugar
+suite sunny swear sweat sweet swift swing sword table taken taste teach teeth thank
+theft their theme there thick thief thing think third thorn those three threw throw
+thumb tiger tight timer tired title toast today token tooth torch total touch tough
+tower toxic trace track trade trail train trait trash treat trend trial tribe trick
+tried truck truly trunk trust truth twice twist uncle under unify union unite unity
+until urban usage usual valid value vault venue verse video vigor viral virus visit
+vital vivid vocal voice voter wagon waist watch water weary weird whale wheat wheel
+where which while white whole whose widow width woman women world worry worse worst
+worth would wound woven wrath wreck wrist write wrong wrote yacht yearn yeast yield
+young youth zebra
+`.trim().split(/\s+/);
+
+// src/games/word-guess/index.ts
+var LEN = 5;
+var TRIES = 6;
+var ROUNDS = 5;
+var NOTE_TICKS = 15;
+function markGuess(guess, answer) {
+  const marks = Array(LEN).fill("miss");
+  const left = {};
+  for (let i = 0; i < LEN; i++) {
+    if (guess[i] === answer[i]) marks[i] = "hit";
+    else left[answer[i]] = (left[answer[i]] ?? 0) + 1;
+  }
+  for (let i = 0; i < LEN; i++) {
+    if (marks[i] === "hit") continue;
+    if ((left[guess[i]] ?? 0) > 0) {
+      marks[i] = "near";
+      left[guess[i]] -= 1;
+    }
+  }
+  return marks;
+}
+var pointsFor = (guessesUsed) => (TRIES + 1 - guessesUsed) * 100;
+function pickWords(n, ctx) {
+  const pool = [...WORDS];
+  const out = [];
+  for (let i = 0; i < n && pool.length > 0; i++) {
+    out.push(pool.splice(Math.floor(ctx.random() * pool.length), 1)[0]);
+  }
+  return out;
+}
+function init8(ctx) {
+  return {
+    answers: pickWords(ROUNDS, ctx),
+    round: 0,
+    guesses: [],
+    typed: "",
+    phase: "guessing",
+    score: 0,
+    solved: 0,
+    note: "",
+    noteTicks: 0,
+    over: false
+  };
+}
+var note = (state, text) => ({ ...state, note: text, noteTicks: NOTE_TICKS });
+function submit(state) {
+  if (state.typed.length < LEN) return note(state, `Need ${LEN} letters`);
+  const answer = state.answers[state.round];
+  const guess = { word: state.typed, marks: markGuess(state.typed, answer) };
+  const guesses = [...state.guesses, guess];
+  const base = { ...state, guesses, typed: "", note: "", noteTicks: 0 };
+  if (guess.word === answer) {
+    return { ...base, phase: "solved", score: state.score + pointsFor(guesses.length), solved: state.solved + 1 };
+  }
+  if (guesses.length >= TRIES) return { ...base, phase: "failed" };
+  return base;
+}
+function onKey9(state, key) {
+  if (state.over) return state;
+  if (state.phase !== "guessing") {
+    if (key !== "enter" && key !== "space") return state;
+    if (state.round + 1 >= state.answers.length) return { ...state, over: true };
+    return { ...state, round: state.round + 1, guesses: [], typed: "", phase: "guessing", note: "", noteTicks: 0 };
+  }
+  if (key === "enter") return submit(state);
+  if (key === "backspace") return state.typed ? { ...state, typed: state.typed.slice(0, -1) } : state;
+  if (/^[a-z]$/.test(key) && state.typed.length < LEN) return { ...state, typed: state.typed + key };
+  return state;
+}
+function update8(state) {
+  if (state.noteTicks === 0) return state;
+  const noteTicks = state.noteTicks - 1;
+  return noteTicks === 0 ? { ...state, note: "", noteTicks } : { ...state, noteTicks };
+}
+function letterMarks(guesses) {
+  const rank = { miss: 0, near: 1, hit: 2 };
+  const out = {};
+  for (const g of guesses) {
+    g.marks.forEach((m, i) => {
+      const ch = g.word[i];
+      if (!out[ch] || rank[m] > rank[out[ch]]) out[ch] = m;
+    });
+  }
+  return out;
+}
+var MARK_COLOR = { hit: "brightGreen", near: "brightYellow", miss: "gray" };
+var GRID_X = 4;
+var GRID_Y = 2;
+var KEYS_X = 32;
+var KEYS_Y = 3;
+var KEY_ROWS = ["qwertyuiop", "asdfghjkl", "zxcvbnm"];
+function drawCell(screen, x, y, ch, mark) {
+  if (mark === "hit") screen.text(x, y, `[${ch.toUpperCase()}]`, MARK_COLOR.hit);
+  else if (mark === "near") screen.text(x, y, `(${ch.toUpperCase()})`, MARK_COLOR.near);
+  else if (mark === "miss") screen.text(x, y, ` ${ch} `, MARK_COLOR.miss);
+  else screen.text(x, y, ch ? ` ${ch.toUpperCase()} ` : " _ ", ch ? "brightWhite" : "gray");
+}
+function draw8(state, screen) {
+  const head = `WORD ${Math.min(state.round + 1, ROUNDS)}/${ROUNDS}`;
+  screen.text(GRID_X, 0, head, "brightWhite");
+  const sc = `SCORE ${state.score}`;
+  screen.text(GAME_WIDTH - 2 - sc.length, 0, sc, "brightWhite");
+  for (let r = 0; r < TRIES; r++) {
+    const y = GRID_Y + r * 2;
+    const g = state.guesses[r];
+    const typing = !g && r === state.guesses.length && state.phase === "guessing";
+    for (let i = 0; i < LEN; i++) {
+      const x = GRID_X + i * 4;
+      if (g) drawCell(screen, x, y, g.word[i], g.marks[i]);
+      else drawCell(screen, x, y, typing ? state.typed[i] ?? "" : "", null);
+    }
+    if (typing) screen.put(GRID_X - 2, y, ">", "brightCyan");
+  }
+  const seen = letterMarks(state.guesses);
+  KEY_ROWS.forEach((row, r) => {
+    for (let i = 0; i < row.length; i++) {
+      const ch = row[i];
+      const x = KEYS_X + r + i * 2, y = KEYS_Y + r * 2;
+      if (ch === "p") {
+        screen.put(x, y, "-", "gray");
+        continue;
+      }
+      const m = seen[ch];
+      screen.put(x, y, m === "miss" ? ch : ch.toUpperCase(), m ? MARK_COLOR[m] : "white");
+    }
+  });
+  screen.text(KEYS_X, KEYS_Y + 6, "no word has a P", "gray");
+  const answer = state.answers[state.round] ?? "";
+  let line = state.note, color = "brightRed";
+  if (state.phase === "solved") {
+    line = `Got it! +${pointsFor(state.guesses.length)}`;
+    color = "brightGreen";
+  } else if (state.phase === "failed") {
+    line = `The word was ${answer.toUpperCase()}`;
+  }
+  if (line) screen.text(KEYS_X, 12, line, color);
+  if (state.phase !== "guessing") {
+    const last = state.round + 1 >= state.answers.length;
+    screen.text(KEYS_X, 14, last ? "Enter: finish" : "Enter: next word", "white");
+  }
+  screen.text(GRID_X - 2, 15, "[A] right spot  (A) wrong spot  a  not in word", "gray");
+  screen.text(GRID_X - 2, 17, `Solved ${state.solved} of ${ROUNDS}`, "gray");
+}
+var wordGuess = {
+  id: "word-guess",
+  title: "Word Guess",
+  description: "Find the hidden five-letter word in six tries. Five words a run.",
+  tickMs: 100,
+  controls: "a-z type  Enter guess  Bksp",
+  maxScore: ROUNDS * pointsFor(1),
+  // every word in one guess
+  length: { kind: "rounds", minutes: 6 },
+  init: init8,
+  onKey: onKey9,
+  update: update8,
+  draw: draw8,
+  score: (s) => s.score,
+  isOver: (s) => s.over
+};
+var word_guess_default = wordGuess;
+
 // src/games/worm/index.ts
 var BOARD_W2 = Math.floor((GAME_WIDTH - 2) / 2);
 var BOARD_H2 = GAME_HEIGHT - 2;
@@ -3580,7 +3795,7 @@ function spawnDot(body, ctx) {
   if (free.length === 0) return null;
   return free[Math.floor(ctx.random() * free.length)];
 }
-function init8(ctx) {
+function init9(ctx) {
   const cx = Math.floor(BOARD_W2 / 2), cy = Math.floor(BOARD_H2 / 2);
   const body = [{ x: cx, y: cy }, { x: cx - 1, y: cy }, { x: cx - 2, y: cy }];
   return {
@@ -3594,13 +3809,13 @@ function init8(ctx) {
     tick: 0
   };
 }
-function onKey9(state, key) {
+function onKey10(state, key) {
   if (key === "space") return { ...state, turbo: !state.turbo };
   if (key !== "up" && key !== "down" && key !== "left" && key !== "right") return state;
   if (key === OPPOSITE[state.moved]) return state;
   return { ...state, pending: key };
 }
-function update8(prev2, ctx) {
+function update9(prev2, ctx) {
   const state = { ...prev2, tick: prev2.tick + 1 };
   if (!state.turbo && state.tick % 2 === 1) return state;
   const head = state.body[0];
@@ -3638,7 +3853,7 @@ function cell(screen, p, chars, color) {
   screen.put(1 + p.x * 2, 1 + p.y, chars[0], color);
   screen.put(2 + p.x * 2, 1 + p.y, chars[1], color);
 }
-function draw8(state, screen) {
+function draw9(state, screen) {
   drawBorder2(state, screen);
   if (state.dot) cell(screen, state.dot, "\u25CF ", "yellow");
   state.body.forEach((p, i) => {
@@ -3656,17 +3871,17 @@ var worm = {
   maxScore: 5220,
   // 29 x 18 cells x 10 points per dot (an upper bound; the worm starts on some cells)
   length: { kind: "open", minutes: 3 },
-  init: init8,
-  onKey: onKey9,
-  update: update8,
-  draw: draw8,
+  init: init9,
+  onKey: onKey10,
+  update: update9,
+  draw: draw9,
   score: (s) => s.score,
   isOver: (s) => s.over
 };
 var worm_default = worm;
 
 // src/games/registry.generated.ts
-var games = [block_drop_default, drift_default, galaxy_default, paddle_duel_default, rail_dash_default, reflex_default, sky_flap_default, tank_duel_default, worm_default];
+var games = [block_drop_default, drift_default, galaxy_default, paddle_duel_default, rail_dash_default, reflex_default, sky_flap_default, tank_duel_default, word_guess_default, worm_default];
 
 // src/arcade.ts
 if (!process.stdout.isTTY || !process.stdin.isTTY) {
