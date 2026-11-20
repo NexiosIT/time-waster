@@ -9,5 +9,5 @@
     "esModuleInterop": true,
     "types": ["node"]
   },
-  "include": ["src", "server/src"]
+  "include": ["src", "server/src", "server/web"]
 }

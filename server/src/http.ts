@@ -1,27 +1,33 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import {
-  board, createSession, deletePlayer, deleteSession, playerForToken, submitScore, upsertPlayer, worldBests, type Db,
+  board, createSession, deletePlayer, deleteSession, playerForToken, submitScore, submitWebScore, upsertPlayer,
+  webBoard, worldBests, type Db,
 } from './db';
+import { normalizeWebName } from './webname';
 import { verifyGithubToken } from './github';
 import {
   AT_MAX_AGE_MS, AT_MAX_FUTURE_MS, BOARD_LIMIT, GAME_ID, MAX_BOARD_GAMES, MAX_BODY_BYTES, MAX_GITHUB_INFLIGHT, RATE,
   maxScoreFor,
 } from './limits';
 import { RateLimiter } from './ratelimit';
-import { knownGames, renderBoard, renderIndex, renderNotFound } from './pages';
+import { knownGames, renderBoard, renderIndex, renderNotFound, renderPlay } from './pages';
 
-export type HandlerDeps = { db: Db; fetchFn: typeof fetch; now: () => Date; trustProxy: boolean };
+export type HandlerDeps = {
+  db: Db; fetchFn: typeof fetch; now: () => Date; trustProxy: boolean;
+  /** The browser play bundle served at /assets/play.js; absent means 404. */
+  playJs?: string;
+};
 
-/** `html` replies are pages; everything else is JSON. */
-type Reply = { status: number; body?: unknown; html?: string };
+/** `html` replies are pages, `js` is the play bundle; everything else is JSON. */
+type Reply = { status: number; body?: unknown; html?: string; js?: string; headers?: Record<string, string> };
 class TooLarge extends Error {}
 
 const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
 const isObject = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v);
 
-const PAGE_HEADERS = {
+const PAGE_HEADERS: Record<string, string> = {
   'content-type': 'text/html; charset=utf-8',
   // No scripts, no external anything: the pages are static HTML with inline styles.
   'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
@@ -29,10 +35,27 @@ const PAGE_HEADERS = {
   'referrer-policy': 'no-referrer',
 };
 
-function send(res: ServerResponse, { status, body, html }: Reply, extra: Record<string, string> = {}): void {
+// The play page may run its one same-origin script and talk to this server; nothing else.
+const PLAY_HEADERS: Record<string, string> = {
+  ...PAGE_HEADERS,
+  'content-security-policy':
+    "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+};
+const JS_HEADERS: Record<string, string> = {
+  'content-type': 'text/javascript; charset=utf-8',
+  'cache-control': 'public, max-age=31536000, immutable',
+  'x-content-type-options': 'nosniff',
+};
+
+function send(res: ServerResponse, { status, body, html, js, headers }: Reply, extra: Record<string, string> = {}): void {
   if (html !== undefined) {
-    res.writeHead(status, { ...PAGE_HEADERS, ...extra });
+    res.writeHead(status, { ...(headers ?? PAGE_HEADERS), ...extra });
     res.end(html);
+    return;
+  }
+  if (js !== undefined) {
+    res.writeHead(status, { ...JS_HEADERS, ...extra });
+    res.end(js);
     return;
   }
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', ...extra });
@@ -106,12 +129,14 @@ function invalidScore(body: Record<string, unknown>, nowMs: number): string | nu
 }
 
 export function createHandler(deps: HandlerDeps): (req: IncomingMessage, res: ServerResponse) => void {
-  const { db, fetchFn, now, trustProxy } = deps;
+  const { db, fetchFn, now, trustProxy, playJs } = deps;
   const limit = (r: { limit: number; windowMs: number }) => new RateLimiter(r.limit, r.windowMs);
   const submitLimit = limit(RATE.submitPerPlayer);
   const loginIdLimit = limit(RATE.loginPerGithubId);
   const loginGlobalLimit = limit(RATE.loginGlobal);
   const loginIpLimit = limit(RATE.loginPerIp);
+  const webIpLimit = limit(RATE.webPerIp);
+  const webGlobalLimit = limit(RATE.webGlobal);
   let githubInFlight = 0;
 
   const sessionPlayer = (req: IncomingMessage) => {
@@ -163,6 +188,25 @@ export function createHandler(deps: HandlerDeps): (req: IncomingMessage, res: Se
     return { status: 200, body: result };
   }
 
+  async function webScores(req: IncomingMessage): Promise<Reply> {
+    const date = now();
+    const ms = date.getTime();
+    if (trustProxy && !webIpLimit.hit(clientIp(req), ms)) return { status: 429, body: { error: 'too many submissions' } };
+    const body = await readJson(req);
+    if (!body) return { status: 400, body: { error: 'bad body' } };
+    const { game, score } = body;
+    if (typeof game !== 'string' || !knownGames().some((g) => g.id === game)) return { status: 400, body: { error: 'unknown game' } };
+    const name = normalizeWebName(body.name);
+    if (name === null) return { status: 400, body: { error: 'bad name' } };
+    if (typeof score !== 'number' || !Number.isInteger(score) || score < 0) {
+      return { status: 400, body: { error: 'score must be a non-negative integer' } };
+    }
+    if (score > maxScoreFor(game)) return { status: 400, body: { error: 'score is above the maximum for this game' } };
+    // Global limit counts only posts that would be stored, so junk can't lock everyone out.
+    if (!webGlobalLimit.hit('*', ms)) return { status: 429, body: { error: 'too many submissions' } };
+    return { status: 200, body: submitWebScore(db, game, name, score, date) };
+  }
+
   async function route(req: IncomingMessage): Promise<Reply> {
     const url = new URL(req.url ?? '/', 'http://localhost');
     const path = url.pathname;
@@ -175,10 +219,24 @@ export function createHandler(deps: HandlerDeps): (req: IncomingMessage, res: Se
     if (method === 'GET' && path.startsWith('/games/')) {
       const game = knownGames().find((g) => g.id === path.slice('/games/'.length));
       if (!game) return { status: 404, html: renderNotFound() };
-      return { status: 200, html: renderBoard(game, board(db, game.id, BOARD_LIMIT).top) };
+      return { status: 200, html: renderBoard(game, board(db, game.id, BOARD_LIMIT).top, webBoard(db, game.id, BOARD_LIMIT)) };
+    }
+    if (method === 'GET' && path.startsWith('/play/')) {
+      const game = knownGames().find((g) => g.id === path.slice('/play/'.length));
+      if (!game) return { status: 404, html: renderNotFound() };
+      return { status: 200, html: renderPlay(game, webBoard(db, game.id, BOARD_LIMIT)), headers: PLAY_HEADERS };
+    }
+    if (method === 'GET' && path === '/assets/play.js') {
+      return playJs === undefined ? { status: 404, body: { error: 'not found' } } : { status: 200, js: playJs };
     }
     if (method === 'POST' && path === '/v1/login') return login(req);
     if (method === 'POST' && path === '/v1/scores') return scores(req);
+    if (method === 'POST' && path === '/v1/web-scores') return webScores(req);
+    if (method === 'GET' && path.startsWith('/v1/web-boards/')) {
+      const game = path.slice('/v1/web-boards/'.length);
+      if (!GAME_ID.test(game)) return { status: 400, body: { error: 'bad game id' } };
+      return { status: 200, body: { game, top: webBoard(db, game, BOARD_LIMIT) } };
+    }
     if (method === 'GET' && path === '/v1/boards') {
       const games = gamesParam(url);
       if (games === null) return { status: 400, body: { error: `games must be 1 to ${MAX_BOARD_GAMES} game ids` } };

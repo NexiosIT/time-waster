@@ -17,6 +17,8 @@ export const RATE = {
   loginPerGithubId: { limit: 10, windowMs: HOUR },
   loginGlobal: { limit: 600, windowMs: HOUR },
   loginPerIp: { limit: 30, windowMs: HOUR },
+  webPerIp: { limit: 30, windowMs: HOUR },
+  webGlobal: { limit: 600, windowMs: HOUR },
 } as const;
 
 const maxScores = new Map<string, number>();

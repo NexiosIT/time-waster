@@ -22,10 +22,10 @@ const stubFetch = (async (input: string | URL | Request, init?: RequestInit) => 
 type Ctx = { base: string; db: Db; clock: { ms: number }; server: Server };
 const open: Server[] = [];
 
-async function setup(opts: { trustProxy?: boolean; fetchFn?: typeof fetch } = {}): Promise<Ctx> {
+async function setup(opts: { trustProxy?: boolean; fetchFn?: typeof fetch; playJs?: string } = {}): Promise<Ctx> {
   const db = openDb(':memory:');
   const clock = { ms: Date.UTC(2026, 10, 20, 12, 0, 0) };
-  const handler = createHandler({ db, fetchFn: opts.fetchFn ?? stubFetch, now: () => new Date(clock.ms), trustProxy: opts.trustProxy ?? false });
+  const handler = createHandler({ db, fetchFn: opts.fetchFn ?? stubFetch, now: () => new Date(clock.ms), trustProxy: opts.trustProxy ?? false, playJs: opts.playJs });
   const server = createServer(handler);
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
   open.push(server);
@@ -395,5 +395,124 @@ describe('http api', () => {
     expect(res.headers.get('content-type')).toMatch(/^text\/html/);
     expect((await fetch(`${c.base}/games/BAD!`)).status).toBe(404);
     expect((await fetch(`${c.base}/`, { method: 'POST' })).status).toBe(404);
+  });
+});
+
+describe('web scores api', () => {
+  const web = (c: Ctx, body: unknown, headers: Record<string, string> = {}) => post(c, '/v1/web-scores', body, headers);
+
+  test('a valid post is stored without signing in and returns rank, best and top', async () => {
+    const c = await setup();
+    const res = await web(c, { game: 'galaxy', name: '  Kim   B ', score: 1200 });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { rank: number; best: number; top: { name: string; score: number }[] };
+    expect(body.rank).toBe(1);
+    expect(body.best).toBe(1200);
+    expect(body.top.map((r) => [r.name, r.score])).toEqual([['Kim B', 1200]]);
+    const board = await fetch(c.base + '/v1/web-boards/galaxy');
+    expect(board.status).toBe(200);
+    expect(await board.json()).toMatchObject({ game: 'galaxy', top: [{ rank: 1, name: 'Kim B', score: 1200 }] });
+  });
+
+  test('invalid posts are 400 with a reason', async () => {
+    const c = await setup();
+    const cases: [unknown, string][] = [
+      ['not json', 'bad body'],
+      [{ game: 'nope', name: 'Kim', score: 1 }, 'unknown game'],
+      [{ game: 'galaxy', name: '<b>', score: 1 }, 'bad name'],
+      [{ game: 'galaxy', name: 'Kim', score: -1 }, 'score must be a non-negative integer'],
+      [{ game: 'galaxy', name: 'Kim', score: 1.5 }, 'score must be a non-negative integer'],
+      [{ game: 'galaxy', name: 'Kim', score: 5201 }, 'score is above the maximum for this game'],
+    ];
+    for (const [body, error] of cases) {
+      const res = await web(c, body);
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error });
+    }
+  });
+
+  test('per-IP limit applies only behind a trusted proxy', async () => {
+    const proxied = await setup({ trustProxy: true });
+    const from = (ip: string) => ({ 'x-forwarded-for': `1.2.3.4, ${ip}` });
+    for (let i = 0; i < 30; i++) expect((await web(proxied, { game: 'galaxy', name: `P${i}`, score: i }, from('7.7.7.7'))).status).toBe(200);
+    expect((await web(proxied, { game: 'galaxy', name: 'X', score: 1 }, from('7.7.7.7'))).status).toBe(429);
+    expect((await web(proxied, { game: 'galaxy', name: 'Y', score: 1 }, from('8.8.8.8'))).status).toBe(200);
+
+    const direct = await setup();
+    for (let i = 0; i < 31; i++) expect((await web(direct, { game: 'galaxy', name: `P${i}`, score: i })).status).toBe(200);
+  });
+
+  test('a bad game id on the web board is 400; an unknown valid id is empty', async () => {
+    const c = await setup();
+    expect((await fetch(c.base + '/v1/web-boards/BAD!')).status).toBe(400);
+    expect(await (await fetch(c.base + '/v1/web-boards/nope')).json()).toEqual({ game: 'nope', top: [] });
+  });
+
+  test('web names never appear on the arcade endpoints', async () => {
+    const c = await setup();
+    await web(c, { game: 'galaxy', name: 'WebKim', score: 5000 });
+    const all = await (await fetch(c.base + '/v1/boards?games=galaxy')).text();
+    const one = await (await fetch(c.base + '/v1/boards/galaxy')).text();
+    expect(all).not.toContain('WebKim');
+    expect(one).not.toContain('WebKim');
+  });
+});
+
+describe('play page and assets', () => {
+  const PAGE_CSP = "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+
+  test('/play/<game> is a page with its own CSP allowing same-origin scripts', async () => {
+    const c = await setup();
+    const res = await fetch(c.base + '/play/galaxy');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toMatch(/^text\/html/);
+    const csp = res.headers.get('content-security-policy') ?? '';
+    expect(csp).toContain("script-src 'self'");
+    expect(csp).toContain("connect-src 'self'");
+    expect(csp).toContain("default-src 'none'");
+    expect(await res.text()).toContain('data-game="galaxy"');
+  });
+
+  test('the leaderboard pages keep exactly the no-script CSP', async () => {
+    const c = await setup();
+    for (const path of ['/', '/games/galaxy']) {
+      const res = await fetch(c.base + path);
+      expect(res.headers.get('content-security-policy')).toBe(PAGE_CSP);
+    }
+  });
+
+  test('unknown or odd play paths get the 404 page (Review Focus 3)', async () => {
+    const c = await setup();
+    for (const path of ['/play/nope', '/play/..%2Fx', '/play/', '/play/galaxy/x']) {
+      const res = await fetch(c.base + path);
+      expect(res.status).toBe(404);
+      expect(res.headers.get('content-security-policy')).toBe(PAGE_CSP);
+    }
+  });
+
+  test('/assets/play.js serves the injected bundle as JavaScript; without one it is 404', async () => {
+    const c = await setup({ playJs: 'console.log(1)' });
+    const res = await fetch(c.base + '/assets/play.js?v=abc');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('text/javascript; charset=utf-8');
+    expect(res.headers.get('cache-control')).toContain('immutable');
+    expect(await res.text()).toBe('console.log(1)');
+    const none = await setup();
+    expect((await fetch(none.base + '/assets/play.js')).status).toBe(404);
+  });
+
+  test('the game page shows the web top 10', async () => {
+    const c = await setup();
+    await post(c, '/v1/web-scores', { game: 'galaxy', name: 'WebKim', score: 10 });
+    expect(await (await fetch(c.base + '/games/galaxy')).text()).toContain('WebKim');
+  });
+});
+
+describe('web score limits', () => {
+  test('rejected posts do not use up the global limit', async () => {
+    const c = await setup();
+    for (let i = 0; i < 650; i++) await post(c, '/v1/web-scores', { game: 'galaxy', name: '<bad>', score: 1 });
+    const ok = await post(c, '/v1/web-scores', { game: 'galaxy', name: 'Kim', score: 1 });
+    expect(ok.status).toBe(200);
   });
 });

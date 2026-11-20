@@ -30,7 +30,7 @@ docker run -d --name time-waster-server --restart unless-stopped \
 | `TRUST_PROXY` | unset | `1` = use the last `X-Forwarded-For` entry as client IP (see above) |
 
 `.github/workflows/server.yml` builds and pushes the image to GHCR on pushes to `main` that
-touch the paths listed in the workflow (`server/`, `src/games/`, `src/core/types.ts`,
+touch the paths listed in the workflow (`server/`, `src/games/`, `src/core/`,
 `package*.json`, `scripts/build*.mjs`, the workflow itself). Pull requests run the tests and
 build the image without pushing it.
 Make the GHCR package public once (package settings, change visibility) so it can be pulled without credentials.
@@ -40,11 +40,40 @@ Make the GHCR package public once (package settings, change visibility) so it ca
 Besides the JSON API under `/v1`, the service serves plain HTML pages (no scripts, strict
 Content-Security-Policy):
 
-- `/` lists the games with their current leader
-- `/games/<game id>` shows that game's top 10, with a passive-aggressive line next to the
-  leader (from `LEADER` in `src/core/heckles.ts`; the same leader and score always get the same line)
+- `/` lists the games with their current leader and a `▶ Play` link
+- `/games/<game id>` shows that game's **Arcade** top 10, with a passive-aggressive line next to the
+  leader (from `LEADER` in `src/core/heckles.ts`; the same leader and score always get the same line),
+  and its **Web** top 10 (see below)
 
 Only games bundled into the image are listed; blocked players are hidden like everywhere else.
+
+## Play in the browser
+
+`/play/<game id>` plays any bundled game in the page. It runs the arcade's own game code
+(`server/web/`, bundled by `scripts/build-server.mjs` into `server/dist/public/play.js` and
+served at `/assets/play.js?v=<hash>`), so speed, rules, P (pause) and Esc (end run) match the
+terminal. Hiding the tab pauses a running game. The page is the only one allowed to run a
+script: its CSP adds `script-src 'self'; connect-src 'self'` and nothing else.
+
+After a run the player types a name and saves. Web scores are a **separate, unverified board**:
+anyone can type any name, and anyone can post a score without playing. They never appear on the
+Arcade board or in the terminal arcade.
+
+- `POST /v1/web-scores` `{ game, name, score }`, no sign-in. Name: 1–20 letters, digits, spaces
+  and `_ - .` (trimmed, inner spaces collapsed, compared case-insensitively). Score: integer up to
+  the game's `maxScore` (1,000,000 when a game sets none). One best per name per game: a higher
+  score replaces it, anything else is accepted and changes nothing. Returns `{ rank, best, top }`.
+- `GET /v1/web-boards/<game id>` returns `{ game, top }`.
+- Limits: 30 posts per IP per hour (with `TRUST_PROXY=1` only) and 600 per hour in total.
+- Web scores live in the same SQLite file (table `web_best`, schema version 2; a version 1
+  database upgrades itself on start).
+
+## Persistence on DigitalOcean App Platform
+
+App Platform containers have **no persistent disk**: `/data/scores.db` (arcade and web scores)
+starts empty after every redeploy or restart. To keep scores, run the image on a Droplet with an
+attached volume mounted at `/data` (the `docker run` above), or move the scores to a managed
+database (needs a code change).
 
 ## Admin
 
@@ -56,6 +85,8 @@ docker exec time-waster-server node server/dist/admin.js delete-score <login> <g
 docker exec time-waster-server node server/dist/admin.js delete-player <login>
 docker exec time-waster-server node server/dist/admin.js block <login>
 docker exec time-waster-server node server/dist/admin.js unblock <login>
+docker exec time-waster-server node server/dist/admin.js web-board <game>
+docker exec time-waster-server node server/dist/admin.js delete-web-score <name> <game>
 ```
 
 ## Backup

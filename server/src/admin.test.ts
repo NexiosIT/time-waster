@@ -64,3 +64,29 @@ describe('admin', () => {
     expect(playerIdByLogin(db, 'bob')).toBe(2);
   });
 });
+
+describe('admin web scores', () => {
+  test('web-board prints the web top and delete-web-score removes a name', async () => {
+    const { submitWebScore } = await import('./db');
+    const { db, lines, run } = setup();
+    submitWebScore(db, 'snake', 'Kim B', 50, t(3));
+    expect(run('web-board', 'snake')).toBe(0);
+    expect(lines).toEqual(['1 Kim B 50']);
+    lines.length = 0;
+    expect(run('delete-web-score', '  kim   b ', 'snake')).toBe(0);
+    expect(lines).toEqual(['deleted Kim B snake']);
+    lines.length = 0;
+    expect(run('delete-web-score', 'kim b', 'snake')).toBe(1);
+    expect(lines).toEqual(['no web score for kim b on snake']);
+    lines.length = 0;
+    expect(run('delete-web-score', '<b>', 'snake')).toBe(1);
+    expect(lines).toEqual(['bad name: <b>']);
+  });
+
+  test('usage lists the web commands', () => {
+    const { lines, run } = setup();
+    expect(run('nope')).toBe(1);
+    expect(lines).toContain('  web-board <game>');
+    expect(lines).toContain('  delete-web-score <name> <game>');
+  });
+});

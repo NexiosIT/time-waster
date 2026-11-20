@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { LEADER, fill } from '../../src/core/heckles';
-import { escapeHtml, leaderQuote, renderBoard, renderIndex } from './pages';
+import { escapeHtml, leaderQuote, renderBoard, renderIndex, renderPlay } from './pages';
 
 const GAMES = [{ id: 'worm', title: 'Worm' }, { id: 'tank-duel', title: 'Tank Duel' }];
 
@@ -49,5 +49,34 @@ describe('pages', () => {
     const html = renderBoard(GAMES[0], [{ rank: 1, login: '<script>x</script>', score: 1, at: '2026-11-20T10:00:00.000Z' }]);
     expect(html).not.toContain('<script>');
     expect(html).toContain('&lt;script&gt;');
+  });
+
+  test('index has a play link per game', () => {
+    const html = renderIndex(GAMES, {});
+    expect(html).toContain('href="/play/worm"');
+    expect(html).toContain('href="/play/tank-duel"');
+  });
+
+  test('a board has a play link and a web top 10 with escaped names', () => {
+    const web = [{ rank: 1, name: '<b>Kim</b>', score: 77, at: '2026-11-20T10:00:00.000Z' }];
+    const html = renderBoard(GAMES[0], [], web);
+    expect(html).toContain('href="/play/worm"');
+    expect(html).toContain('Web');
+    expect(html).toContain('&lt;b&gt;Kim&lt;/b&gt;');
+    expect(html).toContain('77');
+    expect(html).not.toContain('<b>Kim</b>');
+    expect(renderBoard(GAMES[0], [], [])).toContain('No web scores yet');
+  });
+
+  test('the play page loads the script by URL only, with the game id on the body', () => {
+    const html = renderPlay(GAMES[0], []);
+    expect(html).toContain('data-game="worm"');
+    expect(html).toMatch(/<script src="\/assets\/play\.js\?v=[a-z0-9]+" defer><\/script>/);
+    expect(html.match(/<script/g)).toHaveLength(1);
+    expect(html).toContain('id="grid"');
+    expect(html).toContain('id="status"');
+    expect(html).toContain('id="name"');
+    expect(html).toContain('id="web-board"');
+    expect(html).toContain('href="/games/worm"');
   });
 });
