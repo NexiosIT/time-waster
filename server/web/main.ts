@@ -2,11 +2,9 @@
 import { games } from '../../src/games/registry.generated';
 import { PlayController } from './controller';
 import { gridLines } from './grid';
-import { keyFromEvent } from './keys';
+import { keyAction } from './keys';
 
 type WebRow = { rank: number; name: string; score: number };
-
-const PREVENT = new Set(['up', 'down', 'left', 'right', 'space', 'enter', 'escape', 'tab', 'backspace']);
 
 function storageGet(key: string): string | null {
   try { return localStorage.getItem(key); } catch { return null; }
@@ -41,9 +39,6 @@ function start(): void {
   c.onExit = () => { location.href = `/games/${encodeURIComponent(id)}`; };
 
   nameInput.value = storageGet('tw-name') ?? '';
-  // Any focus inside the form (the name field or the Save button) keeps keys away from the game.
-  form.addEventListener('focusin', () => { c.nameFocused = true; });
-  form.addEventListener('focusout', () => { c.nameFocused = false; });
 
   let savedRun: object | null = null;
   form.addEventListener('submit', (e) => {
@@ -76,11 +71,12 @@ function start(): void {
   });
 
   document.addEventListener('keydown', (e) => {
-    if (c.nameFocused) return;
-    const k = keyFromEvent(e);
-    if (k === null) return;
-    if (PREVENT.has(k)) e.preventDefault();
-    c.key(k, performance.now());
+    // Read focus at key time: a flag kept by focus events can go stale when the Save button is disabled.
+    const inForm = form.contains(document.activeElement);
+    c.nameFocused = inForm;
+    const { key, prevent } = keyAction(e, c.state, inForm);
+    if (prevent) e.preventDefault();
+    if (key !== null) c.key(key, performance.now());
   });
   document.addEventListener('visibilitychange', () => c.setHidden(document.hidden, performance.now()));
 

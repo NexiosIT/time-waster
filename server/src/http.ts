@@ -192,7 +192,6 @@ export function createHandler(deps: HandlerDeps): (req: IncomingMessage, res: Se
     const date = now();
     const ms = date.getTime();
     if (trustProxy && !webIpLimit.hit(clientIp(req), ms)) return { status: 429, body: { error: 'too many submissions' } };
-    if (!webGlobalLimit.hit('*', ms)) return { status: 429, body: { error: 'too many submissions' } };
     const body = await readJson(req);
     if (!body) return { status: 400, body: { error: 'bad body' } };
     const { game, score } = body;
@@ -203,6 +202,8 @@ export function createHandler(deps: HandlerDeps): (req: IncomingMessage, res: Se
       return { status: 400, body: { error: 'score must be a non-negative integer' } };
     }
     if (score > maxScoreFor(game)) return { status: 400, body: { error: 'score is above the maximum for this game' } };
+    // Global limit counts only posts that would be stored, so junk can't lock everyone out.
+    if (!webGlobalLimit.hit('*', ms)) return { status: 429, body: { error: 'too many submissions' } };
     return { status: 200, body: submitWebScore(db, game, name, score, date) };
   }
 

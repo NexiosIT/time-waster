@@ -507,3 +507,12 @@ describe('play page and assets', () => {
     expect(await (await fetch(c.base + '/games/galaxy')).text()).toContain('WebKim');
   });
 });
+
+describe('web score limits', () => {
+  test('rejected posts do not use up the global limit', async () => {
+    const c = await setup();
+    for (let i = 0; i < 650; i++) await post(c, '/v1/web-scores', { game: 'galaxy', name: '<bad>', score: 1 });
+    const ok = await post(c, '/v1/web-scores', { game: 'galaxy', name: 'Kim', score: 1 });
+    expect(ok.status).toBe(200);
+  });
+});

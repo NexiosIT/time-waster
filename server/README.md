@@ -30,7 +30,7 @@ docker run -d --name time-waster-server --restart unless-stopped \
 | `TRUST_PROXY` | unset | `1` = use the last `X-Forwarded-For` entry as client IP (see above) |
 
 `.github/workflows/server.yml` builds and pushes the image to GHCR on pushes to `main` that
-touch the paths listed in the workflow (`server/`, `src/games/`, `src/core/types.ts`,
+touch the paths listed in the workflow (`server/`, `src/games/`, `src/core/`,
 `package*.json`, `scripts/build*.mjs`, the workflow itself). Pull requests run the tests and
 build the image without pushing it.
 Make the GHCR package public once (package settings, change visibility) so it can be pulled without credentials.
