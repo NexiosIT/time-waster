@@ -2,9 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { createRandom } from '../../core/random';
 import type { GameContext } from '../../core/types';
 import {
-  MIN_COIN_DIST, SAFE_ZONE, generatePillars, inRect, isBlocked, isWall, spawnCoin,
+  MIN_COIN_DIST, SAFE_ZONE, START, clearanceFor, generatePillars, inRect, isBlocked, isWall, spawnCoin,
   type Rect,
 } from './arena';
+import { MAX_SPEED, START_SPEED } from './physics';
 
 const ctx = (seed = 1): GameContext => ({ random: createRandom(seed), elapsedMs: 0 });
 
@@ -91,5 +92,34 @@ describe('drift arena', () => {
     spawnCoin(car, pillars, c);
     expect(JSON.stringify(pillars)).toBe(snap);
     expect(car).toEqual({ x: 6, y: 10 });
+  });
+  it('clearance grows with speed and clamps', () => {
+    expect(clearanceFor(START_SPEED)).toEqual({ cx: 1, cy: 1 });
+    expect(clearanceFor(MAX_SPEED)).toEqual({ cx: 4, cy: 2 });
+    expect(clearanceFor(MAX_SPEED * 1.5)).toEqual({ cx: 4, cy: 2 });
+  });
+
+  it('at top speed a coin keeps 4 columns / 2 rows from walls and pillars, for every seed', () => {
+    for (let seed = 1; seed <= 50; seed++) {
+      const c = ctx(seed); const pillars = generatePillars(c);
+      const coin = spawnCoin(START, pillars, c, { speed: MAX_SPEED });
+      for (let dy = -2; dy <= 2; dy++) for (let dx = -4; dx <= 4; dx++)
+        expect(isBlocked({ x: coin.x + dx, y: coin.y + dy }, pillars)).toBe(false);
+    }
+  });
+
+  it('falls back to smaller clearance when the arena is crowded', () => {
+    const wall: Rect[] = [{ x: 1, y: 4, w: 58, h: 12 }]; // leaves rows 1-3 and 16-18 only
+    const coin = spawnCoin({ x: 30, y: 2 }, wall, ctx(), { speed: MAX_SPEED });
+    expect(isBlocked(coin, wall)).toBe(false);
+  });
+
+  it('never spawns inside an avoid rect', () => {
+    const avoid: Rect[] = [{ x: 1, y: 1, w: 58, h: 16 }]; // rows 17-18 free; only row 17 meets clearance 1
+    for (let seed = 1; seed <= 20; seed++) {
+      const coin = spawnCoin({ x: 30, y: 10 }, [], ctx(seed), { avoid });
+      expect(avoid.some((r) => inRect(coin, r))).toBe(false);
+      expect(isBlocked(coin, [])).toBe(false);
+    }
   });
 });

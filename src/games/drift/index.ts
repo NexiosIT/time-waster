@@ -58,7 +58,7 @@ function update(state: DriftState, ctx: GameContext): DriftState {
     if (isBlocked(cell, state.pillars)) { crashed = true; break; }
     if (samePoint(cell, coin)) {
       coins += 1;
-      coin = spawnCoin(cell, state.pillars, ctx);
+      coin = spawnCoin(cell, state.pillars, ctx, { speed: speedForCoins(coins) });
     }
     if (trail.length === 0 || !samePoint(trail[0], cell)) trail = [cell, ...trail].slice(0, TRAIL_LEN);
   }

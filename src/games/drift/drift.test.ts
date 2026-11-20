@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createRandom } from '../../core/random';
 import type { GameContext } from '../../core/types';
-import { isBlocked, type Point } from './arena';
+import { clearanceFor, isBlocked, type Point } from './arena';
 import { angleDiff, COINS_TO_MAX, headingAngle, speedForCoins, START_SPEED, TICK_MS } from './physics';
 import drift, { cellOf, TRAIL_LEN, type DriftState } from './index';
 
@@ -100,6 +100,17 @@ describe('drift', () => {
     for (let i = 0; i < 5 && !s.crashed; i++) s = drift.update(s, c);
     expect(s.crashed).toBe(true);
     expect(drift.isOver(s)).toBe(true);
+  });
+
+  it('respawned coin respects clearance for the new speed', () => {
+    const pillars = [{ x: 40, y: 8, w: 3, h: 2 }];
+    for (let seed = 1; seed <= 20; seed++) {
+      const s = drift.update(open({ x: 30, y: 10, coins: 19, pillars, coin: { x: 31, y: 10 } }), ctx(seed));
+      expect(s.coins).toBe(20);
+      const { cx, cy } = clearanceFor(speedForCoins(20));
+      for (let dy = -cy; dy <= cy; dy++) for (let dx = -cx; dx <= cx; dx++)
+        expect(isBlocked({ x: s.coin.x + dx, y: s.coin.y + dy }, pillars)).toBe(false);
+    }
   });
 
   it('hitting a pillar ends the run', () => {

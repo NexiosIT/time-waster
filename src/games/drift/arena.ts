@@ -1,4 +1,5 @@
 import { GAME_HEIGHT, GAME_WIDTH, type GameContext } from '../../core/types';
+import { MAX_SPEED, START_SPEED } from './physics';
 
 export type Point = { x: number; y: number };
 export type Rect = { x: number; y: number; w: number; h: number };
@@ -68,18 +69,39 @@ export function generatePillars(ctx: GameContext): Rect[] {
   return FALLBACK_PILLARS.map((p) => ({ ...p }));
 }
 
+export const pointRect = (p: Point): Rect => ({ x: p.x, y: p.y, w: 1, h: 1 });
+
+/** Free columns/rows a coin should keep around it; grows with speed so it stays reachable. */
+export function clearanceFor(speed: number): { cx: number; cy: number } {
+  const t = (speed - START_SPEED) / (MAX_SPEED - START_SPEED);
+  const cx = Math.min(4, Math.max(1, Math.round(1 + 3 * t)));
+  return { cx, cy: Math.ceil(cx / 2) };
+}
+
+function hasClearance(p: Point, cx: number, cy: number, pillars: Rect[]): boolean {
+  for (let dy = -cy; dy <= cy; dy++)
+    for (let dx = -cx; dx <= cx; dx++)
+      if (isBlocked({ x: p.x + dx, y: p.y + dy }, pillars)) return false;
+  return true;
+}
+
 // Generated layouts (including the fallback) always leave legal cells, so the pool is never empty.
-export function spawnCoin(car: Point, pillars: Rect[], ctx: GameContext): Point {
-  const candidates: Point[] = [];
-  for (let y = 1; y < GAME_HEIGHT - 1; y++) {
+export function spawnCoin(
+  car: Point, pillars: Rect[], ctx: GameContext, opts: { speed?: number; avoid?: Rect[] } = {},
+): Point {
+  const avoid = opts.avoid ?? [];
+  const free: Point[] = [];
+  for (let y = 1; y < GAME_HEIGHT - 1; y++)
     for (let x = 1; x < GAME_WIDTH - 1; x++) {
-      let clear = true;
-      for (let dy = -1; dy <= 1 && clear; dy++)
-        for (let dx = -1; dx <= 1; dx++)
-          if (isBlocked({ x: x + dx, y: y + dy }, pillars)) { clear = false; break; }
-      if (clear) candidates.push({ x, y });
+      const p = { x, y };
+      if (!isBlocked(p, pillars) && !avoid.some((r) => inRect(p, r))) free.push(p);
     }
+  let candidates: Point[] = [];
+  for (let cx = clearanceFor(opts.speed ?? START_SPEED).cx; cx >= 1 && candidates.length === 0; cx--) {
+    const cy = Math.ceil(cx / 2);
+    candidates = free.filter((p) => hasClearance(p, cx, cy, pillars));
   }
+  if (candidates.length === 0) candidates = free;
   const far = candidates.filter((c) => Math.hypot(c.x - car.x, 2 * (c.y - car.y)) >= MIN_COIN_DIST);
   const pool = far.length > 0 ? far : candidates;
   return pool[Math.floor(ctx.random() * pool.length)];
