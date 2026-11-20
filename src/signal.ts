@@ -8,6 +8,22 @@ export function main(argv: string[], stdinText: string, home?: string): void {
     if (cmd === 'done' || cmd === 'attention') {
       const ev = toEvent(cmd, stdinText, new Date());
       if (ev) appendEvent(eventsFile(home), ev);
+    } else if (cmd === 'start' || cmd === 'estimate') {
+      const rest = argv.slice(1);
+      let cwd = process.cwd();
+      const positional: string[] = [];
+      for (let i = 0; i < rest.length; i++) {
+        if (rest[i] === '--cwd' && i + 1 < rest.length) cwd = rest[++i];
+        else positional.push(rest[i]);
+      }
+      const project = path.win32.basename(cwd);
+      const at = new Date().toISOString();
+      if (cmd === 'start') {
+        appendEvent(eventsFile(home), { type: 'start', at, project });
+      } else if (/^\d+$/.test(positional[0] ?? '')) {
+        const minutes = Number(positional[0]);
+        if (minutes >= 1 && minutes <= 120) appendEvent(eventsFile(home), { type: 'estimate', minutes, at, project });
+      }
     } else if (cmd === 'shim') {
       writeShim(binDir(home), process.env.CLAUDE_PLUGIN_ROOT ?? path.resolve(__dirname, '..'));
     }

@@ -34,4 +34,29 @@ describe('signal main', () => {
     fs.writeFileSync(path.join(home, '.time-waster'), 'a file, not a dir');
     expect(() => main(['done'], '{}', home)).not.toThrow();
   });
+  it('start appends a start event', () => {
+    main(['start'], '', home);
+    const ev = JSON.parse(fs.readFileSync(eventsFile(home), 'utf8').trim());
+    expect(ev).toMatchObject({ type: 'start', project: path.win32.basename(process.cwd()) });
+  });
+  it('estimate writes minutes', () => {
+    main(['estimate', '5'], '', home);
+    const ev = JSON.parse(fs.readFileSync(eventsFile(home), 'utf8').trim());
+    expect(ev).toMatchObject({ type: 'estimate', minutes: 5 });
+  });
+  it('estimate rejects bad values', () => {
+    for (const a of [['estimate', '0'], ['estimate', '121'], ['estimate', 'x'], ['estimate', '1.5'], ['estimate']]) {
+      expect(() => main(a, '', home)).not.toThrow();
+    }
+    expect(fs.existsSync(eventsFile(home))).toBe(false);
+  });
+  it('--cwd sets the project for start and estimate, anywhere after the command', () => {
+    main(['start', '--cwd', 'C:\\x\\demo'], '', home);
+    main(['estimate', '--cwd', 'C:\\x\\other', '7'], '', home);
+    main(['estimate', '8', '--cwd', 'C:\\x\\third'], '', home);
+    const evs = fs.readFileSync(eventsFile(home), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    expect(evs[0]).toMatchObject({ type: 'start', project: 'demo' });
+    expect(evs[1]).toMatchObject({ type: 'estimate', minutes: 7, project: 'other' });
+    expect(evs[2]).toMatchObject({ type: 'estimate', minutes: 8, project: 'third' });
+  });
 });
