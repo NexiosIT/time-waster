@@ -30,13 +30,14 @@ var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: tru
 // src/launch.ts
 var launch_exports = {};
 __export(launch_exports, {
+  claimLaunch: () => claimLaunch,
   isOnPath: () => isOnPath,
   launchCommand: () => launchCommand,
   main: () => main,
   spawnDetached: () => spawnDetached
 });
 module.exports = __toCommonJS(launch_exports);
-var path2 = __toESM(require("node:path"));
+var path3 = __toESM(require("node:path"));
 var import_node_child_process = require("node:child_process");
 
 // src/core/paths.ts
@@ -48,10 +49,32 @@ function dataDir(home = os.homedir()) {
 function binDir(home) {
   return path.join(dataDir(home), "bin");
 }
+function aliveFile(home) {
+  return path.join(dataDir(home), "arcade.alive");
+}
+
+// src/core/alive.ts
+var fs = __toESM(require("node:fs"));
+var path2 = __toESM(require("node:path"));
+var STALE_MS = 6e3;
+function isFresh(mtimeMs, nowMs) {
+  return nowMs - mtimeMs < STALE_MS;
+}
+function isArcadeRunning(file, nowMs) {
+  try {
+    return isFresh(fs.statSync(file).mtimeMs, nowMs);
+  } catch {
+    return false;
+  }
+}
+function touchAlive(file) {
+  fs.mkdirSync(path2.dirname(file), { recursive: true });
+  fs.writeFileSync(file, String(process.pid));
+}
 
 // src/launch.ts
 function launchCommand(pluginRoot, hasWt) {
-  const arcade = path2.win32.join(pluginRoot, "dist", "arcade.js");
+  const arcade = path3.win32.join(pluginRoot, "dist", "arcade.js");
   if (hasWt) {
     return { file: "wt", args: ["-w", "0", "nt", "node", arcade], verbatim: false };
   }
@@ -85,9 +108,18 @@ function spawnDetached(cmd, timeoutMs = 2e3) {
     }
   });
 }
-async function main() {
+function claimLaunch(file, nowMs) {
+  if (isArcadeRunning(file, nowMs)) return false;
+  touchAlive(file);
+  return true;
+}
+async function main(argv = process.argv.slice(2)) {
   try {
-    const root = process.env.CLAUDE_PLUGIN_ROOT ?? path2.resolve(__dirname, "..");
+    if (argv.includes("--if-not-running") && !claimLaunch(aliveFile(), Date.now())) {
+      console.log("Arcade already running.");
+      return;
+    }
+    const root = process.env.CLAUDE_PLUGIN_ROOT ?? path3.resolve(__dirname, "..");
     const hasWt = (0, import_node_child_process.spawnSync)("where", ["wt"], { stdio: "ignore" }).status === 0;
     const failure = await spawnDetached(launchCommand(root, hasWt));
     if (failure) {
@@ -111,6 +143,7 @@ if (require.main === module) {
 }
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
+  claimLaunch,
   isOnPath,
   launchCommand,
   main,

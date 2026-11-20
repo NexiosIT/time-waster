@@ -10,7 +10,8 @@
     "build": "node scripts/build.mjs",
     "test": "vitest run",
     "dev": "node scripts/build.mjs --outdir .dev && node .dev/arcade.js",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:mod": "node scripts/test-mod.mjs"
   },
   "devDependencies": {
     "@types/node": "^26.6.6",

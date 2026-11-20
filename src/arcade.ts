@@ -2,7 +2,8 @@ import { App } from './core/app';
 import { parseKeys } from './core/keys';
 import { ENTER_ALT, LEAVE_ALT, renderDiff } from './core/render';
 import { EventWatcher, trimEvents } from './core/events';
-import { eventsFile, scoresFile } from './core/paths';
+import { aliveFile, eventsFile, scoresFile } from './core/paths';
+import { BEAT_MS, clearAlive, touchAlive } from './core/alive';
 import type { CellBuffer } from './core/buffer';
 import { games } from './games/registry.generated';
 
@@ -16,6 +17,11 @@ const app = new App({ games, scoresFile: scoresFile(), nowMs: Date.now(), startG
 const watcher = new EventWatcher(eventsFile(), (ev) => app.onEvent(ev, Date.now()));
 watcher.start();
 
+// Heartbeat: tells the auto-launcher (mod hook) that an arcade is already open.
+const beat = () => { try { touchAlive(aliveFile()); } catch { /* ignore */ } };
+beat();
+const beatTimer = setInterval(beat, BEAT_MS);
+
 let prev: CellBuffer | null = null;
 let timer: NodeJS.Timeout | null = null;
 let done = false;
@@ -25,6 +31,8 @@ function shutdown(code: number, err?: unknown): void {
   done = true;
   if (err === undefined) try { app.quit(); } catch { /* ignore */ } // save the score of a run in progress (never after a crash)
   if (timer) clearInterval(timer);
+  clearInterval(beatTimer);
+  clearAlive(aliveFile());
   watcher.stop();
   process.stdout.write(LEAVE_ALT);
   try { process.stdin.setRawMode(false); } catch { /* ignore */ }

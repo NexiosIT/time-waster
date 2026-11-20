@@ -1,7 +1,15 @@
 {
   "name": "time-waster",
-  "version": "0.1.0",
-  "description": "A terminal arcade for the moments Claude is busy. Signals you when Claude is done or needs you.",
+  "version": "0.2.0",
+  "description": "A terminal arcade for the moments Claude is busy. Opens itself when Claude starts working and signals you when Claude is done or needs you.",
   "author": { "name": "Nexios" },
-  "repository": "https://github.com/NexiosIT/time-waster"
+  "repository": "https://github.com/NexiosIT/time-waster",
+  "userConfig": {
+    "autoOpen": {
+      "type": "boolean",
+      "title": "Open the arcade when Claude starts working",
+      "description": "When on, sending a prompt opens the arcade in a new Windows Terminal tab, unless it is already open.",
+      "default": true
+    }
+  }
 }
