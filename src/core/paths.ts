@@ -10,6 +10,12 @@ export function eventsFile(home?: string): string {
 export function scoresFile(home?: string): string {
   return path.join(dataDir(home), 'scores.json');
 }
+export function accountFile(home?: string): string {
+  return path.join(dataDir(home), 'online.json');
+}
+export function outboxFile(home?: string): string {
+  return path.join(dataDir(home), 'outbox.jsonl');
+}
 export function binDir(home?: string): string {
   return path.join(dataDir(home), 'bin');
 }
