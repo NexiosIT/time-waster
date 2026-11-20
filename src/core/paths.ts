@@ -26,3 +26,6 @@ export function aliveFile(home?: string): string {
 export function runsFile(home?: string): string {
   return path.join(dataDir(home), 'runs.json');
 }
+export function settingsFile(home?: string): string {
+  return path.join(dataDir(home), 'settings.json');
+}

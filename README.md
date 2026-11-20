@@ -76,6 +76,7 @@ separate from `autoOpen`.
 |---------|----------------|---------------------------------------------------|
 | Menu    | Up / Down      | Select a game                                     |
 | Menu    | Enter          | Play                                              |
+| Menu    | H              | Heckling on / off (passive-aggressive pep talk)   |
 | Menu    | Q              | Quit the arcade                                   |
 | Menu    | O              | Share scores online / your online account (when online scores are on) |
 | In game | P              | Pause / resume                                    |
@@ -94,6 +95,7 @@ Everything is under `%USERPROFILE%\.time-waster\`:
 
 - `scores.json` - your local high scores (top 10 per game)
 - `runs.json` - how long your finished runs took (last 20 per game); used for game lengths
+- `settings.json` - your settings (heckling on/off)
 - `events.jsonl` - recent Claude start / estimate / done / needs-you events written by the plugin hooks
 - `bin\arcade.cmd` - the `arcade` command shim
 - `arcade.alive` - heartbeat of an open arcade, so the plugin does not open a second one
