@@ -804,22 +804,34 @@ describe('heckling', () => {
     expect(rows(app, 80, 30, 46_000)[0].trim()).toBe('');
   });
 
-  it('a score stuck for 45 s gets a line on the top row; a Claude banner wins', () => {
+  it('heckles on the top row within seconds of starting a run; a Claude banner wins', () => {
     const app = mk([endless()], { settingsFile: settings() });
     app.key('enter', 0);
-    playFor(app, 46_000);
-    const top = rows(app, 80, 30, 46_000)[0].trim();
+    playFor(app, 9_000);
+    const top = rows(app, 80, 30, 9_000)[0].trim();
     expect(top.length).toBeGreaterThan(0);
     expect(top.length).toBeLessThanOrEqual(80);
-    app.onEvent({ type: 'done', at: new Date(46_000).toISOString(), project: 'p' }, 46_000);
-    expect(rows(app, 80, 30, 46_000)[0]).toContain('Claude is done');
+    app.onEvent({ type: 'done', at: new Date(9_000).toISOString(), project: 'p' }, 9_000);
+    expect(rows(app, 80, 30, 9_000)[0]).toContain('Claude is done');
+  });
+
+  it('keeps heckling a stuck run, not just once', () => {
+    const app = mk([endless()], { settingsFile: settings() });
+    app.key('enter', 0);
+    const lines = new Set<string>();
+    for (let t = 100; t <= 60_000; t += 100) {
+      app.tick(t);
+      const top = rows(app, 80, 30, t)[0].trim();
+      if (top) lines.add(top);
+    }
+    expect(lines.size).toBeGreaterThanOrEqual(3);
   });
 
   it('long lines are clipped to the window width', () => {
     const app = mk([endless()], { settingsFile: settings() });
     app.key('enter', 0);
-    playFor(app, 46_000);
-    const b = app.render(62, 23, 46_000);
+    playFor(app, 9_000);
+    const b = app.render(62, 23, 9_000);
     expect(b.rowText(0).length).toBe(62);
   });
 
@@ -832,14 +844,14 @@ describe('heckling', () => {
     const quick = mk([fake('a', 'Alpha')], { settingsFile: settings() });
     quick.key('enter', 0);
     play(quick);
-    expect(rows(quick).join('\n')).not.toMatch(/Took you|Don't let|broken clock|Finally|dare you|won't last/);
+    expect(rows(quick).join('\n')).not.toMatch(/Took you|Don't let|broken clock|Finally|dare you|Holy shit/);
   });
 
   it('the results screen gets a run-over line (a new best gets a backhanded compliment)', () => {
     const app = mk([fake('a', 'Alpha')], { settingsFile: settings() });
     app.key('enter', 0);
     play(app);
-    expect(rows(app).join('\n')).toMatch(/Took you long enough|Don't let it go|broken clock|Finally\. 3|dare you|won't last/);
+    expect(rows(app).join('\n')).toMatch(/Took you long enough|Don't let it go|broken clock|Finally\. 3|dare you|Holy shit, a new best/);
   });
 
   it('a corrupt settings file means heckling on, no crash', () => {
