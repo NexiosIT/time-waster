@@ -69,14 +69,14 @@ finish. It can only do that for games that declare a `length`. Always set one:
 | `open`   | it runs until the player loses (like Worm)    | your typical run time (see below)          | learned from the player's runs  |
 
 - `timed`: the game **must** end itself at `minutes`. In `isOver`, return true once
-  `ctx.elapsedMs >= minutes * 60_000` (`elapsedMs` excludes pause). Keep the
-  clock in `update` and `isOver`; never use `Date.now()`.
+  `ctx.elapsedMs >= minutes * 60_000` (`elapsedMs` excludes pause). Derive the
+  clock from `ctx.elapsedMs` only; never use `Date.now()`.
 - `rounds` and `open`: play at least **5 complete runs** in the dev build and use your
   typical run time as `minutes`. Do not guess.
-- Learned lengths: the arcade starts from your `minutes` x 1.5 (shown `(est.)`, game marked
-  `NEW`). After 3 finished runs it uses the 75th percentile of the player's last 20
+- Learned lengths (`rounds` and `open` only): the arcade starts from your `minutes` x 1.5
+  (shown `(est.)`, game marked `NEW`). After 3 finished runs it uses the 75th percentile of the player's last 20
   runs (shown `(you)`). Only runs that end on their own (`isOver`) count; Esc, quitting
-  and crashes are not recorded.
+  and crashes are not recorded. A `timed` game is marked `NEW` until its first finished run.
 - No `length` means the game is never suggested, but it is still playable.
 - Your own times: dev builds record runs too. Read
   `%USERPROFILE%\.time-waster\runs.json` (last 20 finished runs per game, in

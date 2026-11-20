@@ -46,19 +46,21 @@ When you send a prompt, the plugin asks Claude to start its reply with a line li
 `Estimate: ~5 min`. The arcade reads it and shows a line at the top of the menu:
 
 ```
- Claude ~6 min left  ·  suggested: Reflex (~1 min)
+ Claude ~6 min left  ·  suggested: Reflex (~1 min, new)
 ```
+
+`, new` means you have not finished that game yet (see `NEW` below).
 
 The suggested game is pre-selected and marked `★`; it is only a suggestion, so you can
 pick any other game, and a run is never ended because Claude finished. Other menu text:
 
-| Text                    | Meaning                                                             |
-|-------------------------|---------------------------------------------------------------------|
-| `Claude: estimating…`   | A task started and Claude has not given its estimate yet            |
-| `Claude is running over`| The estimate has passed; no suggestion                              |
-| `~N min (you)`          | Game length learned from your own finished runs                     |
-| `~N min (est.)`         | The author's guess (plus a safety margin), not enough runs of yours yet |
-| `NEW`                   | Fewer than 3 finished runs of yours; new games are suggested first  |
+| Text                     | Meaning                                                                                                                     |
+|--------------------------|-----------------------------------------------------------------------------------------------------------------------------|
+| `Claude: estimating…`    | A task started and Claude has not given its estimate yet                                                                    |
+| `Claude is running over` | The estimate has passed; no suggestion                                                                                      |
+| `~N min (you)`           | Game length learned from your own finished runs                                                                             |
+| `~N min (est.)`          | The author's guess (plus a safety margin), not enough runs of yours yet                                                     |
+| `NEW`                    | A `rounds`/`open` game with fewer than 3 finished runs of yours, or a `timed` game with none; new games are suggested first |
 
 Learned lengths are the 75th percentile of your last 20 finished runs, so the suggestion
 tends to end before Claude does. Timed games (Reflex) have an exact length.
