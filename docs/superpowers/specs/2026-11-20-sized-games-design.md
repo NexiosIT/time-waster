@@ -25,7 +25,8 @@ game, or learned from how long that player's runs usually last.
 - When the player comes back to the menu, the suggestion is recomputed from the
   time left (play a 4 min game with 6 min estimated, get a ~2 min suggestion after).
 - Two kinds of games:
-  - **fixed-length**: the game ends itself after a set time or number of rounds;
+  - **fixed-length**: the game ends itself after a set time (exact length) or a set number
+    of rounds (length learned per player, since speed varies);
   - **open-ended** (like Worm): length learned from this player's past runs.
 - New games filling the length slots, starting with **Reflex** (~1 min).
 
@@ -82,11 +83,14 @@ game, or learned from how long that player's runs usually last.
 
 ### 1. Asking Claude for an estimate
 
-- The `prompt.submit` handler in `hooks/register.ts` (which already launches the arcade)
-  also appends a short instruction to the prompt text it returns, along the lines of:
+- A classic `UserPromptSubmit` hook (in `hooks/hooks.json`, running `signal.js`) adds a
+  short instruction as **extra context** (`additionalContext`), along the lines of:
   "Before doing anything else, start your reply with exactly one line
   `Estimate: ~N min`, N one of 1, 2, 5, 10, 15, a rough guess of how long this task will
   take you. Then continue normally."
+- *Builder call:* it is **not** appended to the prompt text returned from
+  `prompt.submit`. That would make it part of the user's own message (transcript,
+  up-arrow history, resumed sessions). Extra context keeps the user's prompt untouched.
 - Only for real prompts (`e.command === undefined`), same as the launch, and only when
   `autoOpen` is on (or a new `suggestGames` option; builder's call, default on).
 - Coarse steps (1, 2, 5, 10, 15 meaning 15+) keep it rough and cheap.
@@ -98,7 +102,7 @@ game, or learned from how long that player's runs usually last.
 - Reading point: the first tool use of the turn (classic `PreToolUse` hook, which gets
   `transcript_path`, or the equivalent mod event). If Claude answers without any tool
   use, the turn was short and no estimate is needed; the `Stop` event arrives anyway.
-- `prompt.submit` also writes a `start` event so the arcade knows a new task began
+- The same `UserPromptSubmit` hook also writes a `start` event so the arcade knows a new task began
   (and can show "Claude: estimating…" until the estimate arrives).
 - Hooks must never fail or block Claude (same rule as `signal.js` today).
 - `ClaudeEvent` gains the `start` and `estimate` types; the event reader must keep
@@ -119,22 +123,31 @@ game, or learned from how long that player's runs usually last.
 `Game` gets one new optional field:
 
 ```ts
-length?: { kind: 'fixed'; minutes: number }      // game ends itself after about this long
-       | { kind: 'open'; typicalMinutes: number } // runs until you lose; author's starting guess
+length?: { kind: 'timed'; minutes: number }   // ends itself on a clock (Reflex, Commit Rush)
+       | { kind: 'rounds'; minutes: number }  // fixed number of rounds/floors; minutes = author's guess
+       | { kind: 'open'; minutes: number }    // runs until you lose; minutes = author's guess
 ```
 
-- No `length` = never suggested (still playable). Worm gets
-  `{ kind: 'open', typicalMinutes: 3 }`.
-- A fixed-length game is responsible for ending itself on time (`isOver`), using
-  `ctx.elapsedMs` (which already excludes pause).
+- No `length` = never suggested (still playable). Worm gets `{ kind: 'open', minutes: 3 }`.
+- A `timed` game ends itself on its clock (`isOver`), using `ctx.elapsedMs` (which already
+  excludes pause). Its length is exact and never learned.
+- *Builder call:* `rounds` games (Lander, Deep Dive) can't end on a clock (a turn-based
+  dungeon waits for you), and players differ a lot in speed. So they are learned per
+  player exactly like `open` games; `minutes` is only the starting guess. The kind is still
+  shown so the menu can say "5 rounds" vs "until you lose" if wanted.
 
-### 5. Learned length for open-ended games
+### 5. Learned length (`rounds` and `open` games)
 
 - The host records each finished run's play time (session `elapsedMs`, excludes pause)
   in a new store `%USERPROFILE%\.time-waster\runs.json`: last 20 runs per game, same
-  safe-write approach as `scores.json`. Recorded for all games (cheap, and useful later).
+  safe-write approach as `scores.json`.
+- *Builder call:* only runs that **finished on their own** count (`isOver` became true).
+  Runs ended with Esc, cut short by quitting the arcade, or crashed are not recorded:
+  they are not "how long a game takes", and short ones would pull the estimate down,
+  making suggestions run past Claude. The host already knows which path ended the run
+  (`finish` from game over vs. Esc/quit/crash).
 - A game's expected length for this player:
-  - fewer than 3 recorded runs: the author's `typicalMinutes`;
+  - fewer than 3 recorded runs: the author's `minutes`;
   - otherwise the 75th percentile of recent run times (3 out of 4 runs are shorter),
     biased long on purpose so the suggestion ends before Claude does.
 
@@ -171,10 +184,10 @@ length?: { kind: 'fixed'; minutes: number }      // game ends itself after about
 
 | Length | Game | Kind |
 |---|---|---|
-| ~1 min | **Reflex** (designed below) | fixed, 60 s |
-| ~2 min | Commit Rush: type falling dev words before they land | fixed, 2 min |
-| ~4 min | Lander: 5 landings with thrust taps | fixed, 5 rounds |
-| ~8 min | Deep Dive: turn-based dungeon, 8 floors | fixed, 8 floors |
+| ~1 min | **Reflex** (designed below) | timed, 60 s |
+| ~2 min | Commit Rush: type falling dev words before they land | timed, 2 min |
+| ~4 min | Lander: 5 landings with thrust taps | rounds (learned), 5 rounds |
+| ~8 min | Deep Dive: turn-based dungeon, 8 floors | rounds (learned), 8 floors |
 | learned | Worm (existing) | open |
 | learned | Dodge: endless lane-switching runner that speeds up | open |
 
@@ -187,7 +200,7 @@ them up. Colleagues may swap in their own games for any slot.
 get faster as your streak grows.
 
 - **id / title:** `reflex` / `Reflex`. **Description:** "Press the key before it fades. 60 seconds."
-- **length:** `{ kind: 'fixed', minutes: 1 }`; `isOver` when `ctx.elapsedMs ≥ 60 000`.
+- **length:** `{ kind: 'timed', minutes: 1 }`; `isOver` when `ctx.elapsedMs ≥ 60 000`.
 - **tickMs:** 50 (smooth fade and timer).
 - **Keys used as targets:** the four arrows and the letters `a s d f j k l` (home row,
   easy to find without looking). Never `p` (host pause), never Esc.
@@ -209,12 +222,14 @@ get faster as your streak grows.
 - **Tests** (through the contract, fixed seed): initial state; `onKey`/`update` don't
   mutate; correct key scores and extends streak; wrong key resets streak; fade-out counts
   as a miss; lifetime floor and cap; `isOver` exactly at 60 s and not before;
-  `length` is fixed 1 min.
+  `length` is timed 1 min.
 
 ## Left to the builder
 
 - Exact instruction wording for the estimate, and whether to read it via classic
   `PreToolUse` or a mod event; both must never block Claude.
+- A freshly opened arcade that missed the `start` event: replay recent events on startup
+  (the arcade already replays `events.jsonl`).
 - New option name (`suggestGames`) vs. reusing `autoOpen`.
 - Menu sort order, exact menu text and colours within the sketch above.
 - Run-history file format details.
