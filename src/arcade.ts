@@ -1,7 +1,8 @@
 import { App } from './core/app';
 import { parseKeys } from './core/keys';
 import { ENTER_ALT, LEAVE_ALT, renderDiff } from './core/render';
-import { EventWatcher, trimEvents } from './core/events';
+import { EventWatcher, readRecentEvents, trimEvents } from './core/events';
+import { TASK_MAX_AGE_MS } from './core/task';
 import { aliveFile, eventsFile, runsFile, scoresFile } from './core/paths';
 import { BEAT_MS, clearAlive, touchAlive } from './core/alive';
 import type { CellBuffer } from './core/buffer';
@@ -16,6 +17,10 @@ try { trimEvents(eventsFile()); } catch { /* ignore */ }
 const app = new App({ games, scoresFile: scoresFile(), runsFile: runsFile(), nowMs: Date.now(), startGameId: process.argv[2] });
 const watcher = new EventWatcher(eventsFile(), (ev) => app.onEvent(ev, Date.now()));
 watcher.start();
+try {
+  const now = Date.now();
+  app.replay(readRecentEvents(eventsFile(), now - TASK_MAX_AGE_MS), now);
+} catch { /* ignore */ }
 
 // Heartbeat: tells the auto-launcher (mod hook) that an arcade is already open.
 const beat = () => { try { touchAlive(aliveFile()); } catch { /* ignore */ } };
