@@ -1,6 +1,7 @@
 import * as path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
-import { binDir } from './core/paths';
+import { aliveFile, binDir } from './core/paths';
+import { isArcadeRunning, touchAlive } from './core/alive';
 
 export interface LaunchCommand {
   file: string;
@@ -55,8 +56,23 @@ export function spawnDetached(cmd: LaunchCommand, timeoutMs = 2000): Promise<str
   });
 }
 
-export async function main(): Promise<void> {
+/**
+ * For the auto-launcher: false when an arcade is already running (fresh heartbeat).
+ * Otherwise touches the heartbeat for the new arcade, so prompts sent while it is
+ * still starting don't open a second one, and returns true.
+ */
+export function claimLaunch(file: string, nowMs: number): boolean {
+  if (isArcadeRunning(file, nowMs)) return false;
+  touchAlive(file);
+  return true;
+}
+
+export async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
   try {
+    if (argv.includes('--if-not-running') && !claimLaunch(aliveFile(), Date.now())) {
+      console.log('Arcade already running.');
+      return;
+    }
     const root = process.env.CLAUDE_PLUGIN_ROOT ?? path.resolve(__dirname, '..');
     const hasWt = spawnSync('where', ['wt'], { stdio: 'ignore' }).status === 0;
     const failure = await spawnDetached(launchCommand(root, hasWt));

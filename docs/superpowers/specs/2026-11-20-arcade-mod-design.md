@@ -268,3 +268,19 @@ folder to start".
 - Which ANSI escape sequences and how key input is decoded on Windows.
 - Exact banner colours and wording within the spirit above.
 - Whether to add the CI check for `dist/`.
+
+## Addendum 2026-11-20: auto-open as a mod
+
+The `/arcade` slash command is removed: Claude Code queues slash commands while it
+is busy, which is exactly when the arcade is wanted. Instead the plugin ships a
+function-hooks module (`hooks/register.ts`, listed under `modules` in
+`hooks/hooks.json` beside the classic hooks). On `prompt.submit` (not for slash
+commands) it runs `node dist/launch.js --if-not-running`, without waiting for it.
+
+- Configurable: `userConfig.autoOpen` (boolean, default on), shown in `/config`.
+- No double windows: a running arcade refreshes `%USERPROFILE%\.time-waster\arcade.alive`
+  every 2 s and deletes it on exit; a heartbeat younger than 6 s means "running".
+  The launcher touches the file itself before spawning, so prompts sent while the
+  arcade is still starting don't open a second one.
+- Opening a window still may take focus; that is the accepted trade-off for this option
+  (the team chose it over an in-Claude pane).

@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { launchCommand, isOnPath, spawnDetached } from './launch';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { launchCommand, isOnPath, spawnDetached, claimLaunch } from './launch';
+import { STALE_MS } from './core/alive';
 
 describe('launchCommand', () => {
   it('uses Windows Terminal when available, arcade path as one argv element', () => {
@@ -60,5 +64,19 @@ describe('spawnDetached', () => {
   });
   it('resolves null when the program starts', async () => {
     expect(await spawnDetached({ file: process.execPath, args: ['-e', '0'], verbatim: false })).toBeNull();
+  });
+});
+
+describe('claimLaunch', () => {
+  const tmp = () => path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'tw-claim-')), 'arcade.alive');
+  it('claims when no arcade is running, then refuses a second claim right after', () => {
+    const f = tmp();
+    expect(claimLaunch(f, Date.now())).toBe(true);
+    expect(claimLaunch(f, Date.now())).toBe(false);
+  });
+  it('claims again once the heartbeat is stale', () => {
+    const f = tmp();
+    claimLaunch(f, Date.now());
+    expect(claimLaunch(f, Date.now() + STALE_MS + 1000)).toBe(true);
   });
 });
