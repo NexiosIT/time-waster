@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { toEvent, writeShim, appendEvent, trimEvents, readNewEvents, EventWatcher, ClaudeEvent } from './events';
+import { toEvent, writeShim, appendEvent, trimEvents, readNewEvents, readRecentEvents, EventWatcher, ClaudeEvent } from './events';
 
 const NOW = new Date('2026-11-20T10:00:00.000Z');
 let tmp: string;
@@ -176,5 +176,42 @@ describe('EventWatcher', () => {
     fs.appendFileSync(file, line('done', fresh()));
     await new Promise((r) => setTimeout(r, 100));
     expect(got).toEqual([]);
+  });
+});
+
+describe('start / estimate events', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ev4-'));
+  });
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const put = (file: string, lines: unknown[]) =>
+    fs.writeFileSync(file, lines.map((l) => (typeof l === 'string' ? l : JSON.stringify(l)) + '\n').join(''));
+
+  it('readNewEvents accepts start and estimate, rejects bad estimate and unknown types', () => {
+    const f = path.join(dir, 'e.jsonl');
+    put(f, [
+      { type: 'start', at: '2026-01-01T00:00:00.000Z', project: 'p' },
+      { type: 'estimate', minutes: 5, at: '2026-01-01T00:00:01.000Z', project: 'p' },
+      { type: 'estimate', at: '2026-01-01T00:00:02.000Z', project: 'p' },
+      { type: 'estimate', minutes: '5', at: '2026-01-01T00:00:02.000Z', project: 'p' },
+      { type: 'bogus', at: '2026-01-01T00:00:03.000Z', project: 'p' },
+    ]);
+    expect(readNewEvents(f, 0).events).toEqual([
+      { type: 'start', at: '2026-01-01T00:00:00.000Z', project: 'p' },
+      { type: 'estimate', minutes: 5, at: '2026-01-01T00:00:01.000Z', project: 'p' },
+    ]);
+  });
+  it('readRecentEvents returns only events at or after sinceMs', () => {
+    const f = path.join(dir, 'e.jsonl');
+    put(f, [
+      { type: 'done', at: '2026-01-01T00:00:00.000Z', project: 'a' },
+      { type: 'start', at: '2026-01-01T00:00:10.000Z', project: 'b' },
+      { type: 'attention', at: '2026-01-01T00:00:20.000Z', project: 'c' },
+      'garbage',
+    ]);
+    const since = Date.parse('2026-01-01T00:00:10.000Z');
+    expect(readRecentEvents(f, since).map((e) => e.project)).toEqual(['b', 'c']);
+    expect(readRecentEvents(path.join(dir, 'missing.jsonl'), 0)).toEqual([]);
   });
 });

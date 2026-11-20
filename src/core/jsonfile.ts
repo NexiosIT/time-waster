@@ -22,7 +22,6 @@ export function withRetry<T>(op: () => T): T {
   }
 }
 
-/** File text, or null when the file does not exist. */
 export function readText(file: string): string | null {
   try {
     return withRetry(() => fs.readFileSync(file, 'utf8'));
@@ -32,8 +31,39 @@ export function readText(file: string): string | null {
   }
 }
 
-/** Writes via a temp file and rename so readers never see a half-written file. */
-export function writeAtomic(file: string, text: string): void {
+function parse<T>(text: string, isValid: (data: unknown) => data is T): T | null {
+  try {
+    const data: unknown = JSON.parse(text);
+    return isValid(data) ? data : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Loads and validates a JSON file; null if missing. A corrupt file is moved to `.bak` and gives null. */
+export function loadJson<T>(file: string, isValid: (data: unknown) => data is T): T | null {
+  const text = readText(file);
+  if (text === null) return null;
+  const data = parse(text, isValid);
+  if (data) return data;
+  // Corrupt: only back it up if nobody replaced it since we read it.
+  const again = readText(file);
+  if (again === null) return null;
+  if (again !== text) return parse(again, isValid);
+  try {
+    fs.renameSync(file, file + '.bak');
+  } catch {
+    // best effort
+  }
+  return null;
+}
+
+export function writeAtomic(file: string, data: unknown): void {
+  writeTextAtomic(file, JSON.stringify(data, null, 2));
+}
+
+/** Writes text via a temp file and rename so readers never see a half-written file. */
+export function writeTextAtomic(file: string, text: string): void {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = `${file}.${process.pid}.tmp`;
   try {

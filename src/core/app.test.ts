@@ -4,6 +4,8 @@ import os from 'node:os';
 import * as path from 'node:path';
 import { App } from './app';
 import { loadScores } from './scores';
+import { addRun, loadRuns } from './runs';
+import type { ClaudeEvent } from './events';
 import type { Game } from './types';
 import type { BoardView, OnlinePort, SignIn } from './online/online';
 
@@ -33,6 +35,169 @@ const mk = (games: Game<any>[], extra = {}) => new App({ games, scoresFile: file
 function play(app: App, from = 100, to = 1000) { for (let t = from; t <= to; t += 100) app.tick(t); }
 
 describe('App', () => {
+  describe('Claude task clock in the menu', () => {
+    const at = (ms: number) => new Date(ms).toISOString();
+    const start = (ms = 0): ClaudeEvent => ({ type: 'start', at: at(ms), project: 'p' });
+    const est = (minutes: number, ms = 0): ClaudeEvent => ({ type: 'estimate', minutes, at: at(ms), project: 'p' });
+    const sized = () => [
+      fake('a', 'Alpha', { length: { kind: 'timed', minutes: 1 } }),
+      fake('b', 'Beta', { length: { kind: 'open', minutes: 2 } }),
+      fake('g', 'Gamma', { length: { kind: 'rounds', minutes: 10 } }),
+    ];
+    const line = (r: string[], s: string) => r.find((l) => l.includes(s) && l.includes('Best ')) ?? '';
+
+    it('start + estimate shows time left, stars the suggestion and pre-selects it', () => {
+      const app = mk(sized());
+      app.onEvent(start(), 0);
+      app.onEvent(est(6), 0);
+      const r = rows(app, 62, 23, 0);
+      expect(r[3]).toContain('Claude ~6 min left · suggested: Beta (~3 min, new)');
+      expect(line(r, 'Beta')).toContain('★');
+      expect(line(r, 'Alpha')).not.toContain('★');
+      app.key('enter', 0);
+      expect(rows(app)[29]).toContain('Beta  Score 0');
+    });
+
+    it('start alone shows estimating; done clears it and shows the banner', () => {
+      const app = mk(sized());
+      app.onEvent(start(), 0);
+      expect(has(rows(app, 62, 23, 0), 'Claude: estimating…')).toBe(true);
+      app.onEvent({ type: 'done', at: at(1000), project: 'p' }, 1000);
+      const r = rows(app, 62, 23, 1000);
+      expect(r[0]).toContain('✓ Claude is done');
+      expect(r[3].trim()).toBe('');
+    });
+
+    it('start and estimate never reach the banner', () => {
+      const app = mk(sized());
+      app.onEvent(start(), 0);
+      expect(rows(app, 62, 23, 0)[0].trim()).toBe('');
+      app.onEvent(est(6), 0);
+      const r = rows(app, 62, 23, 0);
+      expect(r[0].trim()).toBe('');
+      expect(r[22]).not.toContain('Claude');
+    });
+
+    it('replay feeds the task clock only', () => {
+      const app = mk(sized());
+      app.replay([start(), est(6)], 0);
+      const r = rows(app, 62, 23, 0);
+      expect(has(r, 'Claude ~6 min left')).toBe(true);
+      expect(r[0].trim()).toBe('');
+    });
+
+    it('7 min after a 5 min estimate shows running over and no star', () => {
+      const app = mk(sized());
+      app.onEvent(start(), 0);
+      app.onEvent(est(5), 0);
+      const r = rows(app, 62, 23, 7 * 60_000);
+      expect(has(r, 'Claude is running over')).toBe(true);
+      expect(r.join('\n')).not.toContain('★');
+    });
+
+    it('a new open game shows NEW and (est.); after 3 runs (you) and no NEW', () => {
+      const rf = path.join(dir, 'runs.json');
+      const app = mk([fake('b', 'Beta', { length: { kind: 'open', minutes: 2 } })], { runsFile: rf });
+      let l = line(rows(app, 62, 23), 'Beta');
+      expect(l).toContain('~3 min (est.)');
+      expect(l).toContain('NEW');
+      for (let i = 0; i < 3; i++) {
+        app.key('enter', 0);
+        play(app, 100, 300);
+        app.key('escape', 300);
+      }
+      l = line(rows(app, 62, 23), 'Beta');
+      expect(l).toContain('~1 min (you)');
+      expect(l).not.toContain('NEW');
+    });
+
+    it('timed game shows its fixed length; game without length shows none', () => {
+      const app = mk([fake('a', 'Alpha', { length: { kind: 'timed', minutes: 1 } }), fake('d', 'Delta')]);
+      const r = rows(app, 62, 23);
+      expect(line(r, 'Alpha')).toMatch(/ 1 min /);
+      expect(line(r, 'Alpha')).not.toContain('~');
+      expect(line(r, 'Delta')).not.toContain('min');
+    });
+
+    it('runs from the runs file are read at startup', () => {
+      const rf = path.join(dir, 'runs.json');
+      for (let i = 0; i < 3; i++) addRun(rf, 'b', 120_000);
+      const app = mk([fake('b', 'Beta', { length: { kind: 'open', minutes: 2 } })], { runsFile: rf });
+      expect(line(rows(app, 62, 23), 'Beta')).toContain('~2 min (you)');
+    });
+
+    it('a later tick without events does not move the cursor back', () => {
+      const app = mk(sized());
+      app.onEvent(start(), 0);
+      app.onEvent(est(6), 0);
+      app.key('up', 0); // Beta -> Alpha
+      app.tick(60_000);
+      rows(app, 62, 23, 60_000);
+      app.tick(120_000);
+      app.key('enter', 120_000);
+      expect(rows(app)[29]).toContain('Alpha  Score 0');
+    });
+
+    it('entering the menu pre-selects the suggestion', () => {
+      const app = mk(sized());
+      app.onEvent(start(), 0);
+      app.onEvent(est(6), 0);
+      app.key('up', 0); // Alpha
+      app.key('enter', 0);
+      app.key('escape', 0); // ends run, back to the menu
+      app.key('escape', 0);
+      app.key('enter', 0);
+      expect(rows(app)[29]).toContain('Beta  Score 0');
+    });
+
+    it('nothing suggested leaves the cursor alone', () => {
+      const app = mk(sized());
+      app.key('down', 0); app.key('down', 0); // Gamma
+      app.onEvent(start(), 0);
+      app.onEvent(est(0.5), 0); // nothing fits
+      app.key('enter', 0);
+      expect(rows(app)[29]).toContain('Gamma  Score 0');
+    });
+
+    it('menu fits the 62x23 minimum without overflowing', () => {
+      const long = 'L'.repeat(40);
+      const app = mk([fake('z', long, { length: { kind: 'open', minutes: 200 } })]);
+      app.onEvent(start(), 0);
+      app.onEvent(est(999), 0);
+      const r = rows(app, 62, 23, 0);
+      expect(r.every((l) => [...l].length === 62)).toBe(true);
+      expect(line(r, 'Best -')).toContain('★');
+    });
+  });
+
+  describe('run recording', () => {
+    it('records a natural end with the played time', () => {
+      const rf = path.join(dir, 'runs.json');
+      const app = mk([fake('a', 'Alpha')], { runsFile: rf });
+      app.key('enter', 0);
+      play(app, 100, 300);
+      expect(loadRuns(rf).a.map((e) => e.ms)).toEqual([300]);
+    });
+
+    it('records nothing for Esc, quit() or a crash', () => {
+      const rf = path.join(dir, 'runs.json');
+      const a = mk([fake('a', 'Alpha')], { runsFile: rf });
+      a.key('enter', 0); a.tick(100); a.key('escape', 100);
+      const b = mk([fake('a', 'Alpha')], { runsFile: rf });
+      b.key('enter', 0); b.tick(100); b.quit();
+      const c = mk([fake('a', 'Alpha', { update: () => { throw new Error('boom'); } })], { runsFile: rf });
+      c.key('enter', 0); c.tick(100);
+      expect(loadRuns(rf)).toEqual({});
+    });
+
+    it('still shows results when runsFile is unwritable', () => {
+      const app = mk([fake('a', 'Alpha')], { runsFile: dir });
+      app.key('enter', 0);
+      play(app, 100, 300);
+      expect(has(rows(app), 'Alpha — Score 3')).toBe(true);
+    });
+  });
+
   it('menu lists titles alphabetically, hides invalid and duplicate ids', () => {
     const app = mk([
       fake('b', 'Beta'), fake('a', 'Alpha'), fake('Bad Id', 'Zed'), fake('a', 'Dup'),
@@ -257,6 +422,20 @@ describe('App', () => {
     expect(rows(app).filter((l) => l.includes('Best ')).length).toBe(1);
   });
 
+  it('skips a game whose length is malformed, keeps one without length', () => {
+    const app = mk([
+      fake('a', 'Alpha', { length: { kind: 'timed', minutes: 1 } }),
+      fake('b', 'Bravo', { length: { kind: 'sometimes', minutes: 1 } as any }),
+      fake('c', 'Charlie', { length: { kind: 'open', minutes: 0 } }),
+      fake('d', 'Delta'),
+    ]);
+    const r = rows(app);
+    expect(has(r, 'Alpha')).toBe(true);
+    expect(has(r, 'Bravo')).toBe(false);
+    expect(has(r, 'Charlie')).toBe(false);
+    expect(has(r, 'Delta')).toBe(true);
+  });
+
   it('Esc on the crash screen returns to the menu', () => {
     const app = mk([fake('a', 'Alpha', { update: () => { throw new Error('boom'); } })]);
     app.key('enter', 0);
@@ -326,8 +505,9 @@ describe('App online', () => {
     const app = mk([fake('a', 'Alpha'), fake('b', 'Beta')], { online, nowMs: 5 });
     expect(online.calls).toContain('refresh 5');
     let r = rows(app);
-    expect(r.find((l) => l.includes('Alpha'))).toMatch(/Best -\s+World 42/);
-    expect(r.find((l) => l.includes('Beta'))).toMatch(/Best -\s+World -/);
+    expect(r.find((l) => l.includes('Best') && l.includes('World'))).toMatch(/Best\s+World/);
+    expect(r.find((l) => l.includes('Alpha'))).toMatch(/\s-\s+42\s*$/);
+    expect(r.find((l) => l.includes('Beta'))).toMatch(/\s-\s+-\s*$/);
     expect(has(r, 'O: share scores online')).toBe(true);
     expect(r[r.length - 1].trimEnd()).toBe('↑↓ select · Enter play · Q quit');
     online.acct = { login: 'robin' };
@@ -502,7 +682,7 @@ describe('App online', () => {
     let r = rowsAt(app);
     insideArea(r);
     expect(has(r, ' · O: account')).toBe(true);
-    expect(has(r, 'World 1000000')).toBe(true);
+    expect(r.find((l) => l.includes('AAAA'))).toMatch(/\s1\.0M\s*$/);
     expect(r[r.length - 1].trimEnd()).toBe('↑↓ select · Enter play · Q quit');
 
     app.key('o', 0);
@@ -543,7 +723,7 @@ describe('App online', () => {
     online.startSignIn = () => { online.calls.push('start'); }; // stays failed
     const app = mk([fake('a', 'Alpha')], { online });
     expect(() => rows(app)).not.toThrow();
-    expect(has(rows(app), 'World -')).toBe(true);
+    expect(rows(app).find((l) => l.includes('Alpha'))).toMatch(/\s-\s+-\s*$/);
     app.key('o', 0);
     expect(has(rows(app), "Couldn't reach GitHub")).toBe(true);
     app.key('escape', 0);

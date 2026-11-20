@@ -9,6 +9,7 @@ export interface Screen {
   clear(): void;
 }
 export interface GameContext { random(): number; elapsedMs: number; }
+export type GameLength = { kind: 'timed' | 'rounds' | 'open'; minutes: number };
 export interface Game<S> {
   id: string;
   title: string;
@@ -16,6 +17,7 @@ export interface Game<S> {
   tickMs: number;
   controls: string;
   maxScore?: number; // highest reachable score; the online leaderboard refuses anything above it (default 1_000_000)
+  length?: GameLength;
   init(ctx: GameContext): S;
   onKey(state: S, key: Key): S;
   update(state: S, ctx: GameContext): S;

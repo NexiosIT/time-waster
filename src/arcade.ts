@@ -1,8 +1,9 @@
 import { App } from './core/app';
 import { parseKeys } from './core/keys';
 import { ENTER_ALT, LEAVE_ALT, renderDiff } from './core/render';
-import { EventWatcher, trimEvents } from './core/events';
-import { accountFile, aliveFile, eventsFile, outboxFile, scoresFile } from './core/paths';
+import { EventWatcher, readRecentEvents, trimEvents } from './core/events';
+import { TASK_MAX_AGE_MS } from './core/task';
+import { accountFile, aliveFile, eventsFile, outboxFile, runsFile, scoresFile } from './core/paths';
 import { onlineConfig } from './core/online/config';
 import { Online } from './core/online/online';
 import { BEAT_MS, clearAlive, touchAlive } from './core/alive';
@@ -17,9 +18,13 @@ if (!process.stdout.isTTY || !process.stdin.isTTY) {
 try { trimEvents(eventsFile()); } catch { /* ignore */ }
 const cfg = onlineConfig(process.env);
 const online = cfg ? new Online({ ...cfg, accountFile: accountFile(), outboxFile: outboxFile() }) : undefined;
-const app = new App({ games, scoresFile: scoresFile(), nowMs: Date.now(), startGameId: process.argv[2], online });
+const app = new App({ games, scoresFile: scoresFile(), runsFile: runsFile(), nowMs: Date.now(), startGameId: process.argv[2], online });
 const watcher = new EventWatcher(eventsFile(), (ev) => app.onEvent(ev, Date.now()));
 watcher.start();
+try {
+  const now = Date.now();
+  app.replay(readRecentEvents(eventsFile(), now - TASK_MAX_AGE_MS), now);
+} catch { /* ignore */ }
 
 // Heartbeat: tells the auto-launcher (mod hook) that an arcade is already open.
 const beat = () => { try { touchAlive(aliveFile()); } catch { /* ignore */ } };

@@ -12,6 +12,7 @@ export class GameSession<S> {
   status: SessionStatus = 'playing';
   error?: string;
   score = 0;
+  endedEarly = false;
 
   private state!: S;
   private tooSmall = false;
@@ -63,12 +64,18 @@ export class GameSession<S> {
     });
   }
 
+  /** Time actually played, excluding pauses and too-small stalls. */
+  get playedMs(): number {
+    return this.elapsedMs;
+  }
+
   setTooSmall(tooSmall: boolean): void {
     this.tooSmall = tooSmall;
   }
 
   end(): void {
     if (this.finished()) return;
+    this.endedEarly = true;
     this.status = 'over';
   }
 

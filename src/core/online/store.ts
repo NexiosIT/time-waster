@@ -1,5 +1,5 @@
 import fs from 'node:fs';
-import { readText, withRetry, writeAtomic } from '../fsutil';
+import { readText, withRetry, writeAtomic, writeTextAtomic } from '../jsonfile';
 import * as path from 'node:path';
 
 export type Account = { serverUrl: string; token: string; login: string };
@@ -31,7 +31,7 @@ export function loadAccount(file: string): Account | null {
 }
 
 export function saveAccount(file: string, a: Account): void {
-  writeAtomic(file, JSON.stringify(a, null, 2));
+  writeAtomic(file, a);
 }
 
 export function clearAccount(file: string): void {
@@ -66,5 +66,5 @@ export function readOutbox(file: string): OutboxEntry[] {
 
 export function writeOutbox(file: string, entries: OutboxEntry[]): void {
   const kept = entries.slice(-OUTBOX_MAX);
-  writeAtomic(file, kept.map((e) => JSON.stringify(e) + '\n').join(''));
+  writeTextAtomic(file, kept.map((e) => JSON.stringify(e) + '\n').join(''));
 }

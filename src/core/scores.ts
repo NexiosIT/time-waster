@@ -1,5 +1,4 @@
-import fs from 'node:fs';
-import { readText, writeAtomic } from './fsutil';
+import { loadJson, writeAtomic } from './jsonfile';
 
 export type ScoreEntry = { score: number; at: string };
 type Scores = Record<string, ScoreEntry[]>;
@@ -22,30 +21,8 @@ function isValid(data: unknown): data is Scores {
   );
 }
 
-function parse(text: string): Scores | null {
-  try {
-    const data: unknown = JSON.parse(text);
-    return isValid(data) ? data : null;
-  } catch {
-    return null;
-  }
-}
-
 export function loadScores(file: string): Scores {
-  const text = readText(file);
-  if (text === null) return {};
-  const data = parse(text);
-  if (data) return data;
-  // Corrupt: only back it up if nobody replaced it since we read it.
-  const again = readText(file);
-  if (again === null) return {};
-  if (again !== text) return parse(again) ?? {};
-  try {
-    fs.renameSync(file, file + '.bak');
-  } catch {
-    // best effort
-  }
-  return {};
+  return loadJson(file, isValid) ?? {};
 }
 
 export function bestScore(file: string, gameId: string): number | null {
@@ -69,6 +46,6 @@ export function addScore(
   const idx = sorted.indexOf(entry);
   const top = sorted.slice(0, TOP_N);
   all[gameId] = top;
-  writeAtomic(file, JSON.stringify(all, null, 2));
+  writeAtomic(file, all);
   return { rank: idx < TOP_N ? idx + 1 : null, isBest, top };
 }

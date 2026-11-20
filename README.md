@@ -40,6 +40,36 @@ add the bin folder to your PATH once. Run this in PowerShell, then open a new te
 [Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path','User') + ';' + "$env:USERPROFILE\.time-waster\bin", 'User')
 ```
 
+## Games sized to Claude's work
+
+When you send a prompt, the plugin asks Claude to start its reply with a line like
+`Estimate: ~5 min`. The arcade reads it and shows a line at the top of the menu:
+
+```
+ Claude ~6 min left  ·  suggested: Reflex (~1 min, new)
+```
+
+`, new` means that game is still `NEW`: fewer than 3 finished runs for a `rounds`/`open`
+game, none for a `timed` game (see `NEW` below).
+
+The suggested game is pre-selected and marked `★`; it is only a suggestion, so you can
+pick any other game, and a run is never ended because Claude finished. Other menu text:
+
+| Text                     | Meaning                                                                                                                     |
+|--------------------------|-----------------------------------------------------------------------------------------------------------------------------|
+| `Claude: estimating…`    | A task started and Claude has not given its estimate yet                                                                    |
+| `Claude is running over` | The estimate has passed; no suggestion                                                                                      |
+| `~N min (you)`           | Game length learned from your own finished runs                                                                             |
+| `~N min (est.)`          | The author's guess (plus a safety margin), not enough runs of yours yet                                                     |
+| `NEW`                    | A `rounds`/`open` game with fewer than 3 finished runs of yours, or a `timed` game with none; new games are suggested first |
+
+Learned lengths are the 75th percentile of your last 20 finished runs, so the suggestion
+tends to end before Claude does. Timed games (Reflex) have an exact length.
+
+To turn the estimate and the suggestion off, open `/config` and set
+**Suggest a game that fits Claude's estimated time** (`suggestGames`) to off. It is
+separate from `autoOpen`.
+
 ## Keys
 
 | Where   | Key            | Action                                            |
@@ -63,7 +93,8 @@ All other keys go to the game; each game shows its own controls in the status li
 Everything is under `%USERPROFILE%\.time-waster\`:
 
 - `scores.json` - your local high scores (top 10 per game)
-- `events.jsonl` - recent Claude done / needs-you events written by the plugin hooks
+- `runs.json` - how long your finished runs took (last 20 per game); used for game lengths
+- `events.jsonl` - recent Claude start / estimate / done / needs-you events written by the plugin hooks
 - `bin\arcade.cmd` - the `arcade` command shim
 - `arcade.alive` - heartbeat of an open arcade, so the plugin does not open a second one
 - `online.json` - your online session (server, session token, GitHub username), only once you sign in

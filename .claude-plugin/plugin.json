@@ -10,6 +10,12 @@
       "title": "Open the arcade when Claude starts working",
       "description": "When on, sending a prompt opens the arcade in a new Windows Terminal tab, unless it is already open.",
       "default": true
+    },
+    "suggestGames": {
+      "type": "boolean",
+      "title": "Suggest a game that fits Claude's estimated time",
+      "description": "When on, Claude starts each reply with a rough time estimate, and the arcade suggests a game that ends before then.",
+      "default": true
     }
   }
 }

@@ -1,7 +1,9 @@
 import fs from 'node:fs';
 import * as path from 'node:path';
 
-export type ClaudeEvent = { type: 'done' | 'attention'; at: string; project: string };
+export type ClaudeEvent =
+  | { type: 'done' | 'attention' | 'start'; at: string; project: string }
+  | { type: 'estimate'; minutes: number; at: string; project: string };
 
 export function toEvent(kind: 'done' | 'attention', hookInput: string, now: Date): ClaudeEvent | null {
   let input: Record<string, unknown> = {};
@@ -45,20 +47,22 @@ export function trimEvents(file: string, keep = 100): void {
 
 function parseEvent(text: string): ClaudeEvent | null {
   try {
-    const v = JSON.parse(text) as Partial<ClaudeEvent> | null;
-    if (
-      v &&
-      typeof v === 'object' &&
-      (v.type === 'done' || v.type === 'attention') &&
-      typeof v.at === 'string' &&
-      typeof v.project === 'string'
-    ) {
+    const v = JSON.parse(text) as (Record<string, unknown> & { type?: unknown }) | null;
+    if (!v || typeof v !== 'object' || typeof v.at !== 'string' || typeof v.project !== 'string') return null;
+    if (v.type === 'done' || v.type === 'attention' || v.type === 'start') {
       return { type: v.type, at: v.at, project: v.project };
+    }
+    if (v.type === 'estimate' && typeof v.minutes === 'number' && Number.isFinite(v.minutes)) {
+      return { type: 'estimate', minutes: v.minutes, at: v.at, project: v.project };
     }
   } catch {
     // skip invalid line
   }
   return null;
+}
+
+export function readRecentEvents(file: string, sinceMs: number): ClaudeEvent[] {
+  return readNewEvents(file, 0).events.filter((e) => Date.parse(e.at) >= sinceMs);
 }
 
 export function readNewEvents(file: string, offset: number): { events: ClaudeEvent[]; offset: number } {

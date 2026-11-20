@@ -1,17 +1,24 @@
 import { CellBuffer } from './buffer';
 import { Banner } from './banner';
 import { GameSession } from './session';
+import { addRun, loadRuns } from './runs';
+import type { Runs } from './runs';
+import { TaskClock } from './task';
+import { expectedLength, suggest } from './length';
+import { clip, onlineHeader, rowSegments, taskLine } from './menu';
+import type { Suggestion } from './menu';
 import { addScore, loadScores } from './scores';
 import type { ScoreEntry } from './scores';
 import type { ClaudeEvent } from './events';
 import { GAME_HEIGHT, GAME_WIDTH, MIN_COLS, MIN_ROWS } from './types';
-import type { Color, Game, Key } from './types';
+import type { Color, Game, GameLength, Key } from './types';
 import type { OnlinePort } from './online/online';
 import { drawAccount, drawMenuHint, drawSignIn, drawWorld } from './onlineScreens';
 
 export interface AppOptions {
   games: Game<any>[];
   scoresFile: string;
+  runsFile?: string;
   nowMs: number;
   seed?: number;
   startGameId?: string;
@@ -35,6 +42,7 @@ const MENU_HINTS = '↑↓ select · Enter play · Q quit';
 export class App {
   private games: Game<any>[];
   private scoresFile: string;
+  private runsFile?: string;
   private seed: number;
   private runs = 0;
   private banner = new Banner();
@@ -49,6 +57,8 @@ export class App {
   private online: OnlinePort | undefined;
   private worldTab = false;
   private confirmDelete = false;
+  private history: Runs = {};
+  private clock = new TaskClock();
 
   constructor(opts: AppOptions) {
     const seen = new Set<string>();
@@ -60,9 +70,11 @@ export class App {
     }
     this.games = ok.sort((a, b) => a.title.localeCompare(b.title));
     this.scoresFile = opts.scoresFile;
+    this.runsFile = opts.runsFile;
     this.seed = opts.seed ?? Date.now();
     this.online = opts.online;
     this.refreshBest();
+    this.preselect(opts.nowMs);
     const start = opts.startGameId ? this.games.find((g) => g.id === opts.startGameId) : undefined;
     if (start) this.start(start, opts.nowMs);
     else this.online?.refreshWorldBest(opts.nowMs, this.gameIds());
@@ -128,8 +140,15 @@ export class App {
     this.afterRun();
   }
 
+  /** done/attention go to the banner; every event feeds the task clock. */
   onEvent(ev: ClaudeEvent, nowMs: number): void {
-    this.banner.push(ev, nowMs);
+    if (ev.type === 'done' || ev.type === 'attention') this.banner.push(ev, nowMs);
+    this.applyToClock([ev], nowMs);
+  }
+
+  /** Startup catch-up from the events file: task clock only, never the banner. */
+  replay(events: ClaudeEvent[], nowMs: number): void {
+    this.applyToClock(events, nowMs);
   }
 
   render(cols: number, rows: number, nowMs: number): CellBuffer {
@@ -158,7 +177,7 @@ export class App {
       const best = this.best.has(g.id) ? String(this.best.get(g.id)) : '-';
       status = `${g.title}  Score ${this.session!.score}  Best ${best}  ${g.controls}  P pause · Esc end`;
     } else {
-      this.drawScreen(area);
+      this.drawScreen(area, nowMs);
       status = this.screen === 'menu' ? MENU_HINTS : '';
     }
     buf.blit(area, Math.floor((cols - GAME_WIDTH) / 2), 1);
@@ -184,6 +203,7 @@ export class App {
     this.results = null;
     this.screen = 'menu';
     this.refreshBest();
+    this.preselect(nowMs);
     this.online?.refreshWorldBest(nowMs, this.gameIds());
   }
 
@@ -219,6 +239,30 @@ export class App {
     } else if (k === 'd') this.confirmDelete = true;
   }
 
+  private applyToClock(events: ClaudeEvent[], nowMs: number): void {
+    const before = this.suggestedId(nowMs);
+    let moved = false;
+    for (const ev of events) {
+      this.clock.apply(ev);
+      if (ev.type === 'start' || ev.type === 'estimate') moved = true;
+    }
+    if (!moved || this.screen !== 'menu') return;
+    const after = this.suggestedId(nowMs);
+    if (after !== null && after !== before) this.preselect(nowMs);
+  }
+
+  /** Id of the game that fits Claude's time left, or null. */
+  private suggestedId(nowMs: number): string | null {
+    const v = this.clock.view(nowMs);
+    return v.state === 'running' ? suggest(this.games, this.history, v.leftMs) : null;
+  }
+
+  private preselect(nowMs: number): void {
+    const id = this.suggestedId(nowMs);
+    const i = id === null ? -1 : this.games.findIndex((g) => g.id === id);
+    if (i >= 0) this.sel = i;
+  }
+
   private afterRun(): void {
     const s = this.session;
     if (this.screen !== 'playing' || !s) return;
@@ -229,7 +273,17 @@ export class App {
       this.screen = 'crashed';
     } else if (s.status === 'over') {
       this.banner.clearMarker();
+      if (!s.endedEarly) this.recordRun(this.game!.id, s.playedMs);
       this.finish(s.score);
+    }
+  }
+
+  private recordRun(id: string, ms: number): void {
+    if (!this.runsFile) return;
+    try {
+      addRun(this.runsFile, id, ms);
+    } catch {
+      // history is best-effort; never break the results screen
     }
   }
 
@@ -250,6 +304,14 @@ export class App {
   }
 
   private refreshBest(): void {
+    this.history = {};
+    if (this.runsFile) {
+      try {
+        this.history = loadRuns(this.runsFile);
+      } catch {
+        // history unavailable: games show as new
+      }
+    }
     this.best.clear();
     try {
       const all = loadScores(this.scoresFile);
@@ -261,26 +323,25 @@ export class App {
     }
   }
 
-  private drawScreen(area: CellBuffer): void {
+  private drawScreen(area: CellBuffer, nowMs: number): void {
     const centre = (y: number, s: string, c: Color = 'white') =>
       area.text(Math.max(0, Math.floor((GAME_WIDTH - s.length) / 2)), y, clip(s, GAME_WIDTH), c);
     if (this.screen === 'menu') {
       centre(1, 'ARCADE', 'brightCyan');
       if (!this.games.length) { centre(5, 'No games yet', 'gray'); return; }
       const online = this.online;
+      const sid = this.suggestedId(nowMs);
+      const expected = (g: Game<any>) => (g.length ? expectedLength(g.length, this.history[g.id] ?? []) : null);
+      const sg = sid === null ? undefined : this.games.find((g) => g.id === sid);
+      const sugg: Suggestion | null = sg ? { title: sg.title, expected: expected(sg)! } : null;
+      centre(2, taskLine(this.clock.view(nowMs), sugg), 'brightYellow');
+      if (online) for (const seg of onlineHeader()) area.text(seg.x, 3, seg.text, seg.color);
       this.games.forEach((g, i) => {
         const best = this.best.has(g.id) ? String(this.best.get(g.id)) : '-';
-        const line = `${i === this.sel ? '> ' : '  '}${g.title}`;
-        const color = i === this.sel ? 'brightWhite' : 'white';
-        if (!online) {
-          area.text(10, 4 + i, clip(line, 36), color);
-          area.text(48, 4 + i, clip(`Best ${best}`, 12), 'gray');
-          return;
-        }
-        const world = online.worldBest(g.id);
-        area.text(4, 4 + i, clip(line, 28), color);
-        area.text(33, 4 + i, clip(`Best ${best}`, 12), 'gray');
-        area.text(46, 4 + i, clip(`World ${world ? world.score : '-'}`, 14), 'gray');
+        const wb = online?.worldBest(g.id);
+        const world = online ? (wb ? String(wb.score) : '-') : undefined;
+        const row = { selected: i === this.sel, title: g.title, expected: expected(g), suggested: g.id === sid, best, world };
+        for (const seg of rowSegments(row)) area.text(seg.x, 4 + i, seg.text, seg.color);
       });
       area.text(0, 17, clip(this.games[this.sel].description, GAME_WIDTH), 'gray');
       if (online) drawMenuHint(area, online.account());
@@ -311,10 +372,16 @@ function wellFormed(g: Game<any>): boolean {
     typeof g.description === 'string' &&
     typeof g.controls === 'string' &&
     typeof g.tickMs === 'number' && Number.isFinite(g.tickMs) && g.tickMs > 0 &&
-    [g.init, g.onKey, g.update, g.draw, g.score, g.isOver].every((f) => typeof f === 'function')
+    [g.init, g.onKey, g.update, g.draw, g.score, g.isOver].every((f) => typeof f === 'function') &&
+    (g.length === undefined || wellFormedLength(g.length))
   );
 }
 
-function clip(s: string, n: number): string {
-  return n <= 0 ? '' : s.length > n ? s.slice(0, n) : s;
+function wellFormedLength(l: unknown): boolean {
+  const x = l as GameLength;
+  return (
+    typeof x === 'object' && x !== null &&
+    ['timed', 'rounds', 'open'].includes(x.kind) &&
+    Number.isFinite(x.minutes) && x.minutes > 0
+  );
 }

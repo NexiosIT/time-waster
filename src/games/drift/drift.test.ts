@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { createRandom } from '../../core/random';
 import type { GameContext } from '../../core/types';
-import { isBlocked, type Point } from './arena';
-import { angleDiff, COINS_TO_MAX, headingAngle, speedForCoins, START_SPEED, TICK_MS } from './physics';
-import drift, { cellOf, TRAIL_LEN, type DriftState } from './index';
+import { carZone, clearanceFor, grown, inRect, intersects, isBlocked, spawnCoin, START as START_CELL, type Point, type Rect } from './arena';
+import { MAX_OIL, MAX_PILLARS, SHUFFLE_TICKS, WARN_TICKS } from './obstacles';
+import { angleDiff, COINS_TO_MAX, GRIP_SLOW, headingAngle, speedForCoins, START_SPEED, TICK_MS } from './physics';
+import { hasEffect } from './effects';
+import { POWER_LIFE, resolveMystery } from './powerups';
+import { FIRST_POWER_AT } from './powerups';
+import drift, { applyPower, cellOf, RAIN_COUNT, spawnAvoid, TRAIL_LEN, type DriftState } from './index';
 
 const ctx = (seed = 1): GameContext => ({ random: createRandom(seed), elapsedMs: 0 });
 const FAR_COIN: Point = { x: 2, y: 2 };
@@ -30,6 +34,11 @@ describe('drift', () => {
     expect(drift.score(s)).toBe(0);
     expect(drift.isOver(s)).toBe(false);
     expect(isBlocked(s.coin, s.pillars)).toBe(false);
+  });
+
+  it('the first power-up is due after the 2nd coin, for every seed', () => {
+    for (let seed = 1; seed <= 20; seed++) expect(drift.init(ctx(seed)).nextPowerAt).toBe(FIRST_POWER_AT);
+    expect(FIRST_POWER_AT).toBe(2);
   });
 
   it('onKey rotates heading, sets lastTurn, ignores other keys, does not mutate', () => {
@@ -102,6 +111,17 @@ describe('drift', () => {
     expect(drift.isOver(s)).toBe(true);
   });
 
+  it('respawned coin respects clearance for the new speed', () => {
+    const pillars = [{ x: 40, y: 8, w: 3, h: 2 }];
+    for (let seed = 1; seed <= 20; seed++) {
+      const s = drift.update(open({ x: 30, y: 10, coins: 19, pillars, coin: { x: 31, y: 10 } }), ctx(seed));
+      expect(s.coins).toBe(20);
+      const { cx, cy } = clearanceFor(speedForCoins(20));
+      for (let dy = -cy; dy <= cy; dy++) for (let dx = -cx; dx <= cx; dx++)
+        expect(isBlocked({ x: s.coin.x + dx, y: s.coin.y + dy }, pillars)).toBe(false);
+    }
+  });
+
   it('hitting a pillar ends the run', () => {
     const s = drift.update(open({ x: 19.7, pillars: [{ x: 20, y: 10, w: 3, h: 2 }] }), ctx());
     expect(s.crashed).toBe(true);
@@ -144,6 +164,94 @@ describe('drift', () => {
     const s = drift.update(open({ x: 58.6, coin: { x: 59, y: 10 } }), ctx());
     expect(s.crashed).toBe(true);
     expect(s.coins).toBe(0);
+  });
+
+  describe('power-ups', () => {
+    const ahead = { coin: { x: 31, y: 10 }, x: 30.6 };
+
+    it('coin gives 10 points; double gives 20; double+nitro gives 60', () => {
+      const pts = (effects: DriftState['effects']) => drift.score(drift.update(open({ ...ahead, effects }), ctx()));
+      expect(pts([])).toBe(10);
+      expect(pts([{ kind: 'double', ticksLeft: 50 }])).toBe(20);
+      expect(pts([{ kind: 'double', ticksLeft: 50 }, { kind: 'nitro', ticksLeft: 50 }])).toBe(60);
+    });
+
+    it('power-up spawns once scheduleCoins reaches nextPowerAt, on a legal non-avoided cell', () => {
+      const s = drift.update(open({ nextPowerAt: 0 }), ctx());
+      expect(s.powerUp).not.toBeNull();
+      expect(s.nextPowerAt).toBeNull();
+      expect(s.powerUp!.ticksLeft).toBe(POWER_LIFE);
+      expect(isBlocked(s.powerUp!.at, s.pillars)).toBe(false);
+      expect(s.powerUp!.at).not.toEqual(s.coin);
+    });
+
+    it('does not spawn before the threshold', () => {
+      const s = drift.update(open({ nextPowerAt: 3, scheduleCoins: 2 }), ctx());
+      expect(s.powerUp).toBeNull();
+    });
+
+    it('power-up expires after POWER_LIFE ticks and reschedules', () => {
+      const c = ctx();
+      const hold = (s: DriftState): DriftState => ({ ...s, x: 5, y: 5, travel: 0 });
+      let s = hold(open({ nextPowerAt: null, powerUp: { kind: 'double', at: { x: 2, y: 18 }, ticksLeft: POWER_LIFE } }));
+      for (let i = 0; i < POWER_LIFE - 1; i++) s = drift.update(hold(s), c);
+      expect(s.powerUp).not.toBeNull();
+      s = drift.update(hold(s), c);
+      expect(s.powerUp).toBeNull();
+      expect([3, 4]).toContain(s.nextPowerAt! - s.scheduleCoins);
+    });
+
+    it('driving through a power-up applies it and reschedules', () => {
+      const s = drift.update(
+        open({ x: 30.6, nextPowerAt: null, powerUp: { kind: 'double', at: { x: 31, y: 10 }, ticksLeft: 100 } }), ctx());
+      expect(hasEffect(s.effects, 'double')).toBe(true);
+      expect(s.powerUp).toBeNull();
+      expect([3, 4]).toContain(s.nextPowerAt! - s.scheduleCoins);
+    });
+
+    it('nitro moves 1.5x as far per tick', () => {
+      const plain = drift.update(open(), ctx());
+      const nitro = drift.update(open({ effects: [{ kind: 'nitro', ticksLeft: 100 }] }), ctx());
+      expect(nitro.x - 30).toBeCloseTo((plain.x - 30) * 1.5);
+    });
+
+    it('grip effect turns at GRIP_SLOW at max speed', () => {
+      const s0 = open({ coins: 20, heading: 2, travel: 0, x: 20, y: 4, effects: [{ kind: 'grip', ticksLeft: 100 }] });
+      const before = Math.abs(angleDiff(s0.travel, headingAngle(s0.heading)));
+      const s = drift.update(s0, ctx());
+      const after = Math.abs(angleDiff(s.travel, headingAngle(s.heading)));
+      expect(before - after).toBeCloseTo(GRIP_SLOW);
+    });
+
+    it('nitro at max speed cannot tunnel through a 1-row pillar', () => {
+      const c = ctx();
+      let s = open({
+        x: 16, y: 10, coins: 20, heading: 1, travel: Math.PI / 4, pillars: [{ x: 17, y: 12, w: 8, h: 1 }],
+        effects: [{ kind: 'nitro', ticksLeft: 100 }],
+      });
+      for (let i = 0; i < 100 && !s.crashed && s.x <= 30; i++) s = drift.update(s, c);
+      expect(s.crashed).toBe(true);
+      expect(cellOf(s).y).toBeLessThanOrEqual(12);
+    });
+
+    it('crash wins over a power-up in the same cell', () => {
+      const s = drift.update(
+        open({ x: 58.6, nextPowerAt: null, powerUp: { kind: 'double', at: { x: 59, y: 10 }, ticksLeft: 100 } }), ctx());
+      expect(s.crashed).toBe(true);
+      expect(hasEffect(s.effects, 'double')).toBe(false);
+    });
+
+    it('readout shows active effects on the top border', () => {
+      const calls = capture(open({ effects: [{ kind: 'double', ticksLeft: 200 }] }));
+      expect(calls.some((l) => l.startsWith('2,0,×,'))).toBe(true);
+    });
+
+    it('power-up glyph blinks in its last ticks', () => {
+      const p = { kind: 'nitro' as const, at: { x: 20, y: 5 }, ticksLeft: 10 };
+      const shown = (tick: number) => capture(open({ powerUp: p, tick })).includes('20,5,N,brightRed');
+      expect(shown(0)).toBe(true);
+      expect(shown(4)).toBe(false);
+    });
   });
 
   it('is a no-op once crashed', () => {
@@ -190,5 +298,362 @@ describe('drift', () => {
     expect(drifting.filter((l) => l.includes(',·,gray'))).toHaveLength(3);
     const straight = capture({ ...base, heading: 0, travel: 0, trail });
     expect(straight.some((l) => l.includes('·'))).toBe(false);
+  });
+
+  describe('coin rain and shield', () => {
+    const rainAhead = (over: Partial<DriftState> = {}) =>
+      open({ x: 30.6, nextPowerAt: null, powerUp: { kind: 'rain', at: { x: 31, y: 10 }, ticksLeft: 100 }, ...over });
+
+    it('coin rain spawns 5 extras on legal distinct cells; they vanish when rain ends', () => {
+      const s = drift.update(rainAhead({ pillars: [{ x: 40, y: 5, w: 3, h: 3 }] }), ctx());
+      expect(hasEffect(s.effects, 'rain')).toBe(true);
+      expect(s.extraCoins).toHaveLength(RAIN_COUNT);
+      const keys = new Set(s.extraCoins.map((p) => `${p.x},${p.y}`));
+      expect(keys.size).toBe(RAIN_COUNT);
+      for (const p of s.extraCoins) {
+        expect(isBlocked(p, s.pillars)).toBe(false);
+        expect(p).not.toEqual(s.coin);
+      }
+      const ended = drift.update({ ...s, x: 5, y: 5, travel: 0, effects: [{ kind: 'rain', ticksLeft: 1 }] }, ctx());
+      expect(hasEffect(ended.effects, 'rain')).toBe(false);
+      expect(ended.extraCoins).toEqual([]);
+    });
+
+    it('extra coins add points and speed but not scheduleCoins', () => {
+      const s = drift.update(open({
+        x: 30.6, coins: 3, scheduleCoins: 3, nextPowerAt: null,
+        extraCoins: [{ x: 31, y: 10 }, { x: 50, y: 15 }], effects: [{ kind: 'rain', ticksLeft: 100 }],
+      }), ctx());
+      expect(s.coins).toBe(4);
+      expect(s.points).toBe(10);
+      expect(s.scheduleCoins).toBe(3);
+      expect(s.extraCoins).toEqual([{ x: 50, y: 15 }]);
+    });
+
+    it('taking coin rain while active resets the timer without new extras', () => {
+      const s = drift.update(rainAhead({
+        effects: [{ kind: 'rain', ticksLeft: 20 }], extraCoins: [{ x: 50, y: 15 }],
+      }), ctx());
+      expect(s.effects.find((e) => e.kind === 'rain')!.ticksLeft).toBeGreaterThan(20);
+      expect(s.extraCoins).toEqual([{ x: 50, y: 15 }]);
+    });
+
+    const shield = [{ kind: 'shield' as const, ticksLeft: 100 }];
+
+    it('shield destroys the pillar it hits, once', () => {
+      const s = drift.update(open({ x: 31.6, pillars: [{ x: 32, y: 10, w: 1, h: 1 }], effects: shield }), ctx());
+      expect(s.crashed).toBe(false);
+      expect(s.pillars).toHaveLength(0);
+      expect(hasEffect(s.effects, 'shield')).toBe(false);
+    });
+
+    it('shield removes the whole pillar, not one cell', () => {
+      const other: Rect = { x: 10, y: 3, w: 1, h: 1 };
+      const s = drift.update(open({ x: 31.6, pillars: [{ x: 32, y: 9, w: 3, h: 3 }, other], effects: shield }), ctx());
+      expect(s.crashed).toBe(false);
+      expect(s.pillars).toEqual([other]);
+    });
+
+    it('shield does not save you from walls', () => {
+      const s = drift.update(open({ x: 58.6, effects: shield }), ctx());
+      expect(s.crashed).toBe(true);
+    });
+
+    it('after the shield is used, a second pillar in the same tick crashes', () => {
+      const s = drift.update(open({
+        coins: 20, effects: [...shield, { kind: 'nitro', ticksLeft: 100 }],
+        pillars: [{ x: 31, y: 10, w: 1, h: 1 }, { x: 32, y: 10, w: 1, h: 1 }],
+      }), ctx());
+      expect(s.crashed).toBe(true);
+      expect(s.pillars).toHaveLength(1);
+      expect(hasEffect(s.effects, 'shield')).toBe(false);
+    });
+
+    it('draws extra coins as yellow dots', () => {
+      const calls = capture({ ...drift.init(ctx()), extraCoins: [{ x: 33, y: 4 }] });
+      expect(calls).toContain('33,4,●,yellow');
+    });
+  });
+});
+
+describe('drift growing arena', () => {
+  const inAny = (p: Point, rects: Rect[]) => rects.some((r) => inRect(p, r));
+  const takeCoin = (over: Partial<DriftState> = {}) => open({ x: 30.6, y: 10, coin: { x: 31, y: 10 }, ...over });
+
+  it('every 5th schedule coin queues an obstacle that is harmless while pending', () => {
+    const before = drift.update(takeCoin({ scheduleCoins: 3, coins: 3 }), ctx());
+    expect(before.pending).toHaveLength(0);
+    const s = drift.update(takeCoin({ scheduleCoins: 4, coins: 4 }), ctx());
+    expect(s.scheduleCoins).toBe(5);
+    expect(s.pending).toHaveLength(1);
+    expect(s.pending[0].ticksLeft).toBe(WARN_TICKS - 1); // queued, then counted down in the same update
+    const driven = drift.update(open({ pending: [{ kind: 'pillar', rect: { x: 31, y: 9, w: 3, h: 3 }, ticksLeft: 30 }] }), ctx());
+    expect(driven.crashed).toBe(false);
+    expect(driven.pending).toHaveLength(1);
+  });
+
+  it('Coin-rain extras do not advance the obstacle schedule', () => {
+    const s = drift.update(open({ x: 30.6, extraCoins: [{ x: 31, y: 10 }], scheduleCoins: 4, coins: 4 }), ctx());
+    expect(s.scheduleCoins).toBe(4);
+    expect(s.pending).toHaveLength(0);
+  });
+
+  it('pending obstacle turns solid after WARN_TICKS', () => {
+    const rect: Rect = { x: 50, y: 15, w: 3, h: 1 };
+    let s = open({ pending: [{ kind: 'pillar', rect, ticksLeft: WARN_TICKS }] });
+    for (let i = 0; i < WARN_TICKS; i++) {
+      expect(s.pending).toHaveLength(1);
+      expect(s.pillars).toHaveLength(0);
+      s = drift.update({ ...s, x: 6, y: 10, travel: 0, heading: 0 }, ctx());
+    }
+    expect(s.pending).toHaveLength(0);
+    expect(s.pillars).toEqual([rect]);
+    const o = drift.update(open({ pending: [{ kind: 'oil', rect, ticksLeft: 1 }] }), ctx());
+    expect(o.oil).toEqual([rect]);
+    expect(o.pillars).toHaveLength(0);
+  });
+
+  it('pending obstacle waits while the car is in its zone', () => {
+    const p = { kind: 'pillar' as const, rect: { x: 33, y: 10, w: 3, h: 1 }, ticksLeft: 0 };
+    const s = drift.update(open({ pending: [p] }), ctx());
+    expect(s.pending).toHaveLength(1);
+    expect(s.pillars).toHaveLength(0);
+  });
+
+  it('oil drops grip to LOW_GRIP; grip effect overrides it', () => {
+    const oil: Rect[] = [{ x: 25, y: 8, w: 10, h: 5 }];
+    const turn = (over: Partial<DriftState>) => drift.update(open({ heading: 2, ...over }), ctx()).travel;
+    const plain = turn({});
+    const slick = turn({ effects: [{ kind: 'slick', ticksLeft: 100 }] });
+    expect(turn({ oil })).toBeCloseTo(slick, 10);
+    expect(turn({ oil })).toBeLessThan(plain);
+    const grip = [{ kind: 'grip' as const, ticksLeft: 100 }];
+    expect(turn({ oil, effects: grip })).toBeCloseTo(turn({ effects: grip }), 10);
+  });
+
+  it('coins and power-ups never spawn on oil or pending rects', () => {
+    const oil: Rect = { x: 3, y: 3, w: 54, h: 6 };
+    const pend: Rect = { x: 3, y: 11, w: 54, h: 6 };
+    const st = open({ oil: [oil], pending: [{ kind: 'pillar', rect: pend, ticksLeft: 30 }] });
+    expect(spawnAvoid(st)).toEqual(expect.arrayContaining([oil, pend]));
+    for (let seed = 1; seed <= 30; seed++) {
+      const n = drift.update({ ...st, x: 30.6, y: 10, coin: { x: 31, y: 10 }, nextPowerAt: 0 }, ctx(seed));
+      expect(inAny(n.coin, [oil, pend])).toBe(false);
+      if (n.powerUp) expect(inAny(n.powerUp.at, [oil, pend])).toBe(false);
+    }
+  });
+
+  it('crowded arena: 60 coins of growth never throws and spawns stay legal', () => {
+    const c = ctx(7);
+    let st = drift.init(c);
+    for (let i = 0; i < 60; i++) {
+      if (i === 30) st = applyPower(st, 'rain', c);
+      const blockers = [...st.oil, ...st.pending.map((p) => p.rect)];
+      let spot: Point | null = null;
+      for (let t = 0; t < 30 && !spot; t++) {
+        const cand = spawnCoin({ x: 0, y: 0 }, st.pillars, c, { avoid: [...blockers, ...spawnAvoid(st)] });
+        const ahead = { x: cand.x + 1, y: cand.y };
+        if (!isBlocked(ahead, st.pillars) && !inAny(ahead, blockers)) spot = cand;
+      }
+      expect(spot).not.toBeNull();
+      st = {
+        ...st, x: spot!.x + 0.49, y: spot!.y, heading: 0, travel: 0, crashed: false,
+        coin: { x: spot!.x + 1, y: spot!.y },
+        extraCoins: st.extraCoins.filter((e) => !(e.x === spot!.x && e.y === spot!.y)),
+      };
+      st = drift.update(st, c);
+      expect(st.pillars.length).toBeLessThanOrEqual(MAX_PILLARS);
+      expect(st.oil.length).toBeLessThanOrEqual(MAX_OIL);
+      const spawned = [st.coin, ...st.extraCoins, ...(st.powerUp ? [st.powerUp.at] : [])];
+      for (const p of spawned) {
+        expect(isBlocked(p, st.pillars)).toBe(false);
+        expect(inAny(p, st.oil)).toBe(false);
+      }
+    }
+    expect(st.scheduleCoins).toBeGreaterThanOrEqual(50);
+  });
+
+  it('draws pending blinking in gray and solid oil in blue', () => {
+    const base = open({
+      pending: [{ kind: 'pillar', rect: { x: 10, y: 5, w: 1, h: 1 }, ticksLeft: 9 }, { kind: 'oil', rect: { x: 12, y: 5, w: 1, h: 1 }, ticksLeft: 9 }],
+      oil: [{ x: 14, y: 5, w: 1, h: 1 }],
+    });
+    const on = capture({ ...base, tick: 0 });
+    expect(on).toContain('10,5,░,gray');
+    expect(on).toContain('12,5,≈,gray');
+    expect(on).toContain('14,5,≈,blue');
+    const off = capture({ ...base, tick: 4 });
+    expect(off).not.toContain('10,5,░,gray');
+    expect(off).toContain('14,5,≈,blue');
+  });
+
+  describe('shuffle', () => {
+    const OLD: Rect = { x: 40, y: 10, w: 2, h: 1 };
+    const NEW: Rect = { x: 40, y: 3, w: 2, h: 1 };
+    const still = (s: DriftState): DriftState => ({ ...s, x: 6, y: 10, travel: 0, heading: 0 });
+
+    it('shuffle shows new layout for SHUFFLE_TICKS then swaps', () => {
+      let s = applyPower(open({ pillars: [OLD] }), 'shuffle', ctx());
+      expect(s.shuffle).not.toBeNull();
+      expect(s.shuffle!.ticksLeft).toBe(SHUFFLE_TICKS);
+      s = { ...s, shuffle: { pillars: [NEW], ticksLeft: SHUFFLE_TICKS } };
+      for (let i = 0; i < SHUFFLE_TICKS - 1; i++) {
+        s = drift.update(still(s), ctx());
+        expect(s.pillars).toEqual([OLD]);
+        expect(s.shuffle).not.toBeNull();
+      }
+      s = drift.update(still(s), ctx());
+      expect(s.shuffle).toBeNull();
+      expect(s.pillars).toEqual([NEW]);
+      expect(spawnAvoid({ ...s, shuffle: { pillars: [NEW], ticksLeft: 5 } })).toContainEqual(NEW);
+    });
+
+    it('old pillars stay solid and new ones are harmless while pending', () => {
+      const drive = (y: number, pillars: Rect[]): DriftState => {
+        let t = open({ x: 36, y, pillars, shuffle: { pillars: [NEW], ticksLeft: 25 } });
+        for (let i = 0; i < 20 && !t.crashed && t.x < 44; i++) t = drift.update(t, ctx());
+        return t;
+      };
+      expect(drive(10, [OLD]).crashed).toBe(true);
+      expect(drive(3, []).crashed).toBe(false);
+    });
+
+    it('shuffled layout keeps a 2-cell gap to oil and pending rects', () => {
+      const oil: Rect = { x: 30, y: 12, w: 3, h: 1 };
+      const pend: Rect = { x: 40, y: 5, w: 3, h: 1 };
+      const olds: Rect[] = [8, 16, 24, 32, 44, 50].map((x) => ({ x, y: 15, w: 2, h: 1 }));
+      for (let seed = 1; seed <= 40; seed++) {
+        const s = applyPower(open({ pillars: olds, oil: [oil], pending: [{ kind: 'pillar', rect: pend, ticksLeft: 30 }] }), 'shuffle', ctx(seed));
+        for (const p of s.shuffle!.pillars) {
+          const kept = olds.some((q) => q === p);
+          if (kept) continue;
+          expect(intersects(grown(p, 2), oil)).toBe(false);
+          expect(intersects(grown(p, 2), pend)).toBe(false);
+        }
+      }
+    });
+
+    it('mystery can resolve to shuffle', () => {
+      let seed = 1;
+      while (resolveMystery(ctx(seed)) !== 'shuffle') seed++;
+      const s = applyPower(open({ pillars: [OLD] }), 'mystery', ctx(seed));
+      expect(s.shuffle).not.toBeNull();
+    });
+
+    it('swap drops new pillars that clash with the car zone at swap time', () => {
+      const clash: Rect = { x: 31, y: 9, w: 2, h: 2 };
+      const s = drift.update(open({ pillars: [OLD], shuffle: { pillars: [clash, NEW], ticksLeft: 1 } }), ctx());
+      expect(s.pillars).not.toContainEqual(clash);
+      expect(s.pillars).toContainEqual(NEW);
+      expect(s.crashed).toBe(false);
+      expect(s.shuffle).toBeNull();
+    });
+
+    it('a pending pillar that turns solid during the shuffle window survives the swap', () => {
+      const P: Rect = { x: 50, y: 15, w: 2, h: 1 };
+      let s = open({ pillars: [OLD], shuffle: { pillars: [NEW], ticksLeft: 5 }, pending: [{ kind: 'pillar', rect: P, ticksLeft: 2 }] });
+      for (let i = 0; i < 5; i++) s = drift.update(still(s), ctx());
+      expect(s.shuffle).toBeNull();
+      expect(s.pillars).toEqual(expect.arrayContaining([NEW, P]));
+      expect(s.pillars).toHaveLength(2);
+    });
+
+    it('a pillar the shield destroys during the window does not come back at the swap', () => {
+      const hit: Rect = { x: 32, y: 9, w: 2, h: 3 };
+      const other: Rect = { x: 30, y: 16, w: 2, h: 1 };
+      let s = open({
+        x: 31.7, pillars: [hit, OLD], effects: [{ kind: 'shield', ticksLeft: 100 }],
+        shuffle: { pillars: [NEW, other], ticksLeft: 3 },
+      });
+      s = drift.update(s, ctx());
+      expect(s.pillars).toEqual([OLD]);
+      for (let i = 0; i < 2; i++) s = drift.update(still(s), ctx());
+      expect(s.shuffle).toBeNull();
+      expect(s.pillars).toHaveLength(1);
+    });
+
+    it('picking up Shuffle through update queues a new layout and keeps the old pillars solid', () => {
+      const s = drift.update(open({
+        x: 30.6, pillars: [OLD], nextPowerAt: null, powerUp: { kind: 'shuffle', at: { x: 31, y: 10 }, ticksLeft: 100 },
+      }), ctx());
+      expect(s.shuffle).not.toBeNull();
+      expect(s.shuffle!.ticksLeft).toBeGreaterThanOrEqual(SHUFFLE_TICKS - 1);
+      expect(s.pillars).toEqual([OLD]);
+      expect(s.powerUp).toBeNull();
+    });
+
+    it('Shuffle picked up mid-tick keeps clear of the car zone at the pickup sub-step', () => {
+      const olds: Rect[] = [4, 12, 20, 28, 36, 44, 52].map((x) => ({ x, y: 16, w: 2, h: 1 }));
+      for (let seed = 1; seed <= 200; seed++) {
+        // Max speed + nitro: 1.8 cells per tick in 2 sub-steps; the pickup is on the 2nd (x = 31.8).
+        const s = drift.update(open({
+          x: 30, coins: 20, pillars: olds, effects: [{ kind: 'nitro', ticksLeft: 100 }], nextPowerAt: null,
+          powerUp: { kind: 'shuffle', at: { x: 32, y: 10 }, ticksLeft: 100 },
+        }), ctx(seed));
+        expect(s.shuffle).not.toBeNull();
+        const zone = carZone(s.x, s.y, s.travel);
+        for (const p of s.shuffle!.pillars) expect(zone.some((z) => intersects(z, p)), `seed ${seed}`).toBe(false);
+      }
+    });
+  });
+});
+
+describe('drift coin clearance survives new obstacles', () => {
+  const TOP = 20; // coins at which speed is MAX
+  const box = (p: Point, speed: number): Rect => {
+    const { cx, cy } = clearanceFor(speed);
+    return { x: p.x - cx, y: p.y - cy, w: 2 * cx + 1, h: 2 * cy + 1 };
+  };
+  const pickups = (s: DriftState): Point[] => [s.coin, ...s.extraCoins, ...(s.powerUp ? [s.powerUp.at] : [])];
+  const expectClear = (s: DriftState, label: string) => {
+    const speed = speedForCoins(s.coins);
+    for (const p of pickups(s)) {
+      const near = s.pillars.filter((r) => intersects(box(p, speed), r));
+      expect(near, `${label}: pickup ${p.x},${p.y}`).toEqual([]);
+    }
+  };
+  const hold = (s: DriftState): DriftState => ({ ...s, x: 6, y: 10, travel: 0, heading: 0 });
+
+  it('after a Shuffle swap every live pickup keeps clearance from all pillars', () => {
+    for (let seed = 1; seed <= 150; seed++) {
+      const c = ctx(seed);
+      const base = drift.init(c);
+      const pillars = base.pillars;
+      const speed = speedForCoins(TOP);
+      const coin = spawnCoin(START_CELL, pillars, c, { speed });
+      let s: DriftState = { ...base, coins: TOP, coin, nextPowerAt: null };
+      s = applyPower(s, 'rain', c);
+      s = { ...s, powerUp: { kind: 'double', at: spawnCoin(START_CELL, pillars, c, { speed, avoid: spawnAvoid(s) }), ticksLeft: POWER_LIFE } };
+      s = applyPower(s, 'shuffle', c);
+      for (let i = 0; i < SHUFFLE_TICKS && s.shuffle; i++) s = drift.update(hold(s), c);
+      expect(s.shuffle).toBeNull();
+      expectClear(s, `seed ${seed}`);
+    }
+  });
+
+  it('after a new obstacle turns solid every live pickup keeps clearance from all pillars', () => {
+    for (let seed = 1; seed <= 150; seed++) {
+      const c = ctx(seed);
+      const base = drift.init(c);
+      let s: DriftState = {
+        ...base, coins: TOP, scheduleCoins: 4, nextPowerAt: null, x: 30.6, y: 10, coin: { x: 31, y: 10 },
+        pillars: base.pillars.filter((r) => !intersects(grown(r, 2), { x: 28, y: 9, w: 6, h: 3 })),
+      };
+      s = drift.update(s, c);
+      expect(s.pending).toHaveLength(1);
+      for (let i = 0; i < WARN_TICKS + 2 && s.pending.length > 0 && !s.crashed; i++) s = drift.update(hold(s), c);
+      expectClear(s, `seed ${seed}`);
+    }
+  });
+
+  it('a coin spawned while a pending pillar exists keeps clearance from it', () => {
+    const rect: Rect = { x: 3, y: 3, w: 54, h: 6 };
+    for (let seed = 1; seed <= 60; seed++) {
+      const s = drift.update(open({
+        x: 30.6, y: 12, coin: { x: 31, y: 12 }, coins: TOP - 1, pending: [{ kind: 'pillar', rect, ticksLeft: 30 }],
+      }), ctx(seed));
+      expect(s.coins).toBe(TOP);
+      expect(intersects(box(s.coin, speedForCoins(TOP)), rect)).toBe(false);
+    }
   });
 });
