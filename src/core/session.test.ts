@@ -32,6 +32,27 @@ describe('createRandom', () => {
 });
 
 describe('GameSession', () => {
+  it('playedMs grows with ticks, not while paused; endedEarly only on escape', () => {
+    const s = new GameSession(fake({ isOver: () => false }), { seed: 1, nowMs: 0 });
+    run(s, 100, 300);
+    expect(s.playedMs).toBe(300);
+    s.key('p');
+    run(s, 400, 700);
+    expect(s.playedMs).toBe(300);
+    s.key('p');
+    s.tick(800);
+    expect(s.playedMs).toBe(400);
+    expect(s.endedEarly).toBe(false);
+    s.key('escape');
+    expect(s.endedEarly).toBe(true);
+    const n = new GameSession(fake(), { seed: 1, nowMs: 0 });
+    run(n, 100, 1000);
+    expect(n.status).toBe('over');
+    expect(n.endedEarly).toBe(false);
+    n.key('escape');
+    expect(n.endedEarly).toBe(false);
+  });
+
   it('runs to game over', () => {
     const s = new GameSession(fake(), { seed: 1, nowMs: 0 });
     run(s, 0, 1000);

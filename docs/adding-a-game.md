@@ -29,12 +29,15 @@ From `src/core/types.ts`:
 ```ts
 interface GameContext { random(): number; elapsedMs: number }
 
+type GameLength = { kind: 'timed' | 'rounds' | 'open'; minutes: number };
+
 interface Game<S> {
   id: string;            // same as the folder name
   title: string;         // shown in the menu (menu is sorted by title)
   description: string;   // one line, shown in the menu
   tickMs: number;        // how often update() runs, e.g. 120
   controls: string;      // short key hint for the status line, e.g. '←↑→↓ turn'
+  length?: GameLength;   // how long a run takes; see "Game length" below
   init(ctx: GameContext): S;                 // fresh state at the start of a run
   onKey(state: S, key: Key): S;              // one key press
   update(state: S, ctx: GameContext): S;     // one tick (every tickMs)
@@ -53,6 +56,35 @@ backspace | tab`, or a single lowercase letter, digit or symbol (`'a'`, `'1'`, `
 
 The host calls `init` once, `onKey` per key press, `update` every `tickMs`, then
 `isOver`; `draw` paints onto an already-cleared screen.
+
+## Game length
+
+While Claude works, the menu suggests a game that ends before Claude is expected to
+finish. It can only do that for games that declare a `length`. Always set one:
+
+| `kind`   | Use it when                                   | `minutes`                                  | Length the menu uses            |
+|----------|-----------------------------------------------|--------------------------------------------|---------------------------------|
+| `timed`  | the game ends itself on a clock               | the exact run time                         | exactly `minutes`, never learned |
+| `rounds` | a fixed number of rounds or floors, no clock  | your typical run time (see below)          | learned from the player's runs  |
+| `open`   | it runs until the player loses (like Worm)    | your typical run time (see below)          | learned from the player's runs  |
+
+- `timed`: the game **must** end itself at `minutes`. In `isOver`, return true once
+  `ctx.elapsedMs >= minutes * 60_000` (`elapsedMs` excludes pause). Derive the
+  clock from `ctx.elapsedMs` only; never use `Date.now()`.
+- `rounds` and `open`: play at least **5 complete runs** in the dev build and use your
+  typical run time as `minutes`. Do not guess.
+- Learned lengths (`rounds` and `open` only): the arcade starts from your `minutes` x 1.5
+  (shown `(est.)`, game marked `NEW`). After 3 finished runs it uses the 75th percentile
+  of the player's last 20 runs (shown `(you)`). Only runs that end on their own
+  (`isOver`) count; Esc, quitting and crashes are not recorded. A `timed` game is marked
+  `NEW` until its first finished run.
+- No `length` means the game is never suggested, but it is still playable.
+- Your own times: dev builds record runs too. Read
+  `%USERPROFILE%\.time-waster\runs.json` (last 20 finished runs per game, in
+  milliseconds).
+
+Example: `length: { kind: 'timed', minutes: 1 }` for Reflex, `{ kind: 'open', minutes: 3 }`
+for Worm.
 
 ## Input is press-only
 

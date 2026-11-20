@@ -126,6 +126,7 @@ const worm: Game<WormState> = {
   description: "Eat dots, grow longer, don't bite yourself.",
   tickMs: 60,           // normal speed moves every other tick (120 ms), turbo every tick
   controls: '←↑→↓ Spc turbo',
+  length: { kind: 'open', minutes: 3 },
   init,
   onKey,
   update,

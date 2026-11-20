@@ -17,3 +17,6 @@ export function binDir(home?: string): string {
 export function aliveFile(home?: string): string {
   return path.join(dataDir(home), 'arcade.alive');
 }
+export function runsFile(home?: string): string {
+  return path.join(dataDir(home), 'runs.json');
+}

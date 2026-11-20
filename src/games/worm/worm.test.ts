@@ -153,4 +153,8 @@ describe('worm', () => {
       expect(text(paint(worm.onKey(worm.init(ctx()), 'space')))).toContain('TURBO');
     });
   });
+
+  it('declares an open length of 3 minutes', () => {
+    expect(worm.length).toEqual({ kind: 'open', minutes: 3 });
+  });
 });
