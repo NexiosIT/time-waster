@@ -781,3 +781,69 @@ describe('App online', () => {
     expect(online.refreshedGames.at(-1)).toEqual(['a', 'b']);
   });
 });
+
+describe('heckling', () => {
+  const settings = () => path.join(dir, 'settings.json');
+  const endless = (score = 0) => fake('e', 'Endless', { score: () => score, isOver: () => false });
+  const playFor = (app: App, ms: number) => { for (let t = 100; t <= ms; t += 100) app.tick(t); };
+
+  it('H in the menu toggles heckling and remembers it', () => {
+    const app = mk([fake('a', 'Alpha')], { settingsFile: settings() });
+    expect(has(rows(app), 'H: heckling on')).toBe(true);
+    app.key('h', 0);
+    expect(has(rows(app), 'H: heckling off')).toBe(true);
+    expect(JSON.parse(fs.readFileSync(settings(), 'utf8')).heckle).toBe(false);
+    expect(has(rows(mk([fake('a', 'Alpha')], { settingsFile: settings() })), 'H: heckling off')).toBe(true);
+  });
+
+  it('without a settings file there is no heckling and no H hint (existing behaviour)', () => {
+    const app = mk([endless()]);
+    expect(has(rows(app), 'heckling')).toBe(false);
+    app.key('enter', 0);
+    playFor(app, 46_000);
+    expect(rows(app, 80, 30, 46_000)[0].trim()).toBe('');
+  });
+
+  it('a score stuck for 45 s gets a line on the top row; a Claude banner wins', () => {
+    const app = mk([endless()], { settingsFile: settings() });
+    app.key('enter', 0);
+    playFor(app, 46_000);
+    const top = rows(app, 80, 30, 46_000)[0].trim();
+    expect(top.length).toBeGreaterThan(0);
+    expect(top.length).toBeLessThanOrEqual(80);
+    app.onEvent({ type: 'done', at: new Date(46_000).toISOString(), project: 'p' }, 46_000);
+    expect(rows(app, 80, 30, 46_000)[0]).toContain('Claude is done');
+  });
+
+  it('long lines are clipped to the window width', () => {
+    const app = mk([endless()], { settingsFile: settings() });
+    app.key('enter', 0);
+    playFor(app, 46_000);
+    const b = app.render(62, 23, 46_000);
+    expect(b.rowText(0).length).toBe(62);
+  });
+
+  it('switched off: nothing on the top row and no run-over line', () => {
+    fs.writeFileSync(settings(), JSON.stringify({ heckle: false }));
+    const app = mk([endless()], { settingsFile: settings() });
+    app.key('enter', 0);
+    playFor(app, 46_000);
+    expect(rows(app, 80, 30, 46_000)[0].trim()).toBe('');
+    const quick = mk([fake('a', 'Alpha')], { settingsFile: settings() });
+    quick.key('enter', 0);
+    play(quick);
+    expect(rows(quick).join('\n')).not.toMatch(/Took you|Don't let|broken clock|Finally|dare you|won't last/);
+  });
+
+  it('the results screen gets a run-over line (a new best gets a backhanded compliment)', () => {
+    const app = mk([fake('a', 'Alpha')], { settingsFile: settings() });
+    app.key('enter', 0);
+    play(app);
+    expect(rows(app).join('\n')).toMatch(/Took you long enough|Don't let it go|broken clock|Finally\. 3|dare you|won't last/);
+  });
+
+  it('a corrupt settings file means heckling on, no crash', () => {
+    fs.writeFileSync(settings(), 'not json {');
+    expect(has(rows(mk([fake('a', 'Alpha')], { settingsFile: settings() })), 'H: heckling on')).toBe(true);
+  });
+});
