@@ -15,6 +15,7 @@ import type { Color, Game, GameLength, Key } from './types';
 import type { OnlinePort } from './online/online';
 import { drawAccount, drawMenuHint, drawSignIn, drawWorld } from './onlineScreens';
 import { Heckler } from './heckler';
+import { isJinxed } from './jinx';
 import { createRandom } from './random';
 import { loadSettings, saveSettings } from './settings';
 
@@ -29,6 +30,8 @@ export interface AppOptions {
   online?: OnlinePort;
   /** Player settings (heckling on/off). Absent: no heckling and no H toggle. */
   settingsFile?: string;
+  /** Local usernames (the OS account). Checked with the online login for the jinx; see jinx.ts. */
+  usernames?: string[];
 }
 
 type ScreenName = 'menu' | 'playing' | 'results' | 'crashed' | 'signin' | 'account';
@@ -68,6 +71,7 @@ export class App {
   private heckleOn = false;
   private heckler: Heckler;
   private runLine: string | null = null;
+  private usernames: string[];
 
   constructor(opts: AppOptions) {
     const seen = new Set<string>();
@@ -82,6 +86,7 @@ export class App {
     this.runsFile = opts.runsFile;
     this.seed = opts.seed ?? Date.now();
     this.online = opts.online;
+    this.usernames = opts.usernames ?? [];
     this.heckler = new Heckler(createRandom(this.seed ^ 0x5eed));
     this.settingsFile = opts.settingsFile;
     if (this.settingsFile) this.heckleOn = loadSettings(this.settingsFile).heckle;
@@ -233,7 +238,8 @@ export class App {
   private start(game: Game<any>, nowMs: number): void {
     this.game = game;
     this.results = null;
-    this.session = new GameSession(game, { seed: this.seed + this.runs++, nowMs });
+    const jinx = isJinxed([...this.usernames, this.online?.account()?.login]);
+    this.session = new GameSession(game, { seed: this.seed + this.runs++, nowMs, jinx });
     this.heckler.startRun();
     this.screen = 'playing';
     this.afterRun();

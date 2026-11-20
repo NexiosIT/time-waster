@@ -1,3 +1,4 @@
+import { userInfo } from 'node:os';
 import { App } from './core/app';
 import { parseKeys } from './core/keys';
 import { ENTER_ALT, LEAVE_ALT, renderDiff } from './core/render';
@@ -18,7 +19,13 @@ if (!process.stdout.isTTY || !process.stdin.isTTY) {
 try { trimEvents(eventsFile()); } catch { /* ignore */ }
 const cfg = onlineConfig(process.env);
 const online = cfg ? new Online({ ...cfg, accountFile: accountFile(), outboxFile: outboxFile() }) : undefined;
-const app = new App({ games, scoresFile: scoresFile(), runsFile: runsFile(), nowMs: Date.now(), startGameId: process.argv[2], online, settingsFile: settingsFile() });
+function localUsernames(): string[] {
+  const names = [process.env.USERNAME, process.env.USER];
+  try { names.push(userInfo().username); } catch { /* ignore */ }
+  return names.filter((n): n is string => typeof n === 'string' && n.length > 0);
+}
+
+const app = new App({ games, scoresFile: scoresFile(), runsFile: runsFile(), nowMs: Date.now(), startGameId: process.argv[2], online, settingsFile: settingsFile(), usernames: localUsernames() });
 const watcher = new EventWatcher(eventsFile(), (ev) => app.onEvent(ev, Date.now()));
 watcher.start();
 try {

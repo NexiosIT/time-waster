@@ -1,3 +1,4 @@
+import { Jinx } from './jinx';
 import { createRandom } from './random';
 import { GAME_HEIGHT, GAME_WIDTH } from './types';
 import type { Game, GameContext, Key, Screen } from './types';
@@ -20,9 +21,11 @@ export class GameSession<S> {
   private elapsedMs = 0;
   private acc = 0;
   private random: () => number;
+  private jinx: Jinx | null;
 
-  constructor(private game: Game<S>, opts: { seed: number; nowMs: number }) {
+  constructor(private game: Game<S>, opts: { seed: number; nowMs: number; jinx?: boolean }) {
     this.random = createRandom(opts.seed);
+    this.jinx = opts.jinx ? new Jinx(opts.seed) : null;
     this.lastMs = opts.nowMs;
     this.guard(() => {
       this.state = this.game.init(this.ctx());
@@ -38,8 +41,9 @@ export class GameSession<S> {
       return;
     }
     if (this.status !== 'playing') return;
+    const keys = this.jinx ? this.jinx.keys(k) : [k];
     this.guard(() => {
-      this.state = this.game.onKey(this.state, k);
+      for (const key of keys) this.state = this.game.onKey(this.state, key);
       this.refreshScore();
     });
   }
@@ -50,7 +54,8 @@ export class GameSession<S> {
     if (this.finished() || this.status !== 'playing' || this.tooSmall) return;
     this.elapsedMs += dt;
     this.acc += dt;
-    const tickMs = this.game.tickMs;
+    this.jinx?.advance(dt);
+    const tickMs = this.jinx ? this.jinx.tickMs(this.game.tickMs) : this.game.tickMs;
     const due = Math.floor(this.acc / tickMs);
     const steps = Math.min(due, MAX_STEPS);
     this.acc = due > MAX_STEPS ? 0 : this.acc - steps * tickMs;
@@ -84,6 +89,7 @@ export class GameSession<S> {
     if (this.status === 'crashed') return;
     this.guard(() => this.game.draw(this.state, screen));
     if (this.finished() && this.error !== undefined) { screen.clear(); return; }
+    if (this.jinx?.glitching && this.status === 'playing' && !this.tooSmall) this.jinx.paint(screen);
     const overlay = this.tooSmall ? TOO_SMALL_TEXT : this.status === 'paused' ? PAUSED_TEXT : null;
     if (overlay) {
       screen.text(

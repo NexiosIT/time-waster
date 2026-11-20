@@ -89,6 +89,12 @@ separate from `autoOpen`.
 
 All other keys go to the game; each game shows its own controls in the status line.
 
+### The jinx
+
+If your OS username or online login contains `thomas` (any case), every game runs 33%
+faster, about 1 in 8 key presses is dropped or doubled, and the screen glitches now and
+then. Esc, P and Ctrl+C are never affected. It's a joke; see `src/core/jinx.ts`.
+
 ## Where data lives
 
 Everything is under `%USERPROFILE%\.time-waster\`:
