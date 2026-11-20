@@ -711,6 +711,24 @@ function eventsFile(home) {
 function scoresFile(home) {
   return path3.join(dataDir(home), "scores.json");
 }
+function aliveFile(home) {
+  return path3.join(dataDir(home), "arcade.alive");
+}
+
+// src/core/alive.ts
+var fs3 = __toESM(require("node:fs"));
+var path4 = __toESM(require("node:path"));
+var BEAT_MS = 2e3;
+function touchAlive(file) {
+  fs3.mkdirSync(path4.dirname(file), { recursive: true });
+  fs3.writeFileSync(file, String(process.pid));
+}
+function clearAlive(file) {
+  try {
+    fs3.unlinkSync(file);
+  } catch {
+  }
+}
 
 // src/games/worm/index.ts
 var STEP = {
@@ -793,6 +811,14 @@ try {
 var app = new App({ games, scoresFile: scoresFile(), nowMs: Date.now(), startGameId: process.argv[2] });
 var watcher = new EventWatcher(eventsFile(), (ev) => app.onEvent(ev, Date.now()));
 watcher.start();
+var beat = () => {
+  try {
+    touchAlive(aliveFile());
+  } catch {
+  }
+};
+beat();
+var beatTimer = setInterval(beat, BEAT_MS);
 var prev = null;
 var timer = null;
 var done = false;
@@ -804,6 +830,8 @@ function shutdown(code, err) {
   } catch {
   }
   if (timer) clearInterval(timer);
+  clearInterval(beatTimer);
+  clearAlive(aliveFile());
   watcher.stop();
   process.stdout.write(LEAVE_ALT);
   try {
