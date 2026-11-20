@@ -67,10 +67,10 @@ function update(state: DriftState, ctx: GameContext): DriftState {
 
 function draw(state: DriftState, screen: Screen): void {
   const W = GAME_WIDTH - 1, H = GAME_HEIGHT - 1;
-  for (let x = 1; x < W; x++) { screen.put(x, 0, '─', 'white'); screen.put(x, H, '─', 'white'); }
-  for (let y = 1; y < H; y++) { screen.put(0, y, '│', 'white'); screen.put(W, y, '│', 'white'); }
-  screen.put(0, 0, '┌', 'white'); screen.put(W, 0, '┐', 'white');
-  screen.put(0, H, '└', 'white'); screen.put(W, H, '┘', 'white');
+  for (let x = 1; x < W; x++) { screen.put(x, 0, '─', 'gray'); screen.put(x, H, '─', 'gray'); }
+  for (let y = 1; y < H; y++) { screen.put(0, y, '│', 'gray'); screen.put(W, y, '│', 'gray'); }
+  screen.put(0, 0, '┌', 'gray'); screen.put(W, 0, '┐', 'gray');
+  screen.put(0, H, '└', 'gray'); screen.put(W, H, '┘', 'gray');
 
   for (const r of state.pillars) {
     for (let y = r.y; y < r.y + r.h; y++)
