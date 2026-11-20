@@ -1,4 +1,4 @@
-import { writeFileSync } from 'node:fs';
+import { writeFileSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
@@ -7,6 +7,7 @@ import { discoverGames } from './discover.mjs';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const gamesDir = join(root, 'src', 'games');
 
+mkdirSync(gamesDir, { recursive: true });
 const ids = discoverGames(gamesDir);
 const imports = ids.map((id, i) => `import game${i} from './${id}/index';`).join('\n');
 const list = ids.map((_, i) => `game${i}`).join(', ');

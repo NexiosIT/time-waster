@@ -16,6 +16,9 @@ describe('discoverGames', () => {
     writeFileSync(join(dir, 'registry.generated.ts'), '');
     expect(discoverGames(dir)).toEqual(['bricks', 'worm']);
   });
+  it('returns [] for a missing dir', () => {
+    expect(discoverGames(join(dir, 'nope'))).toEqual([]);
+  });
   it('returns [] for an empty dir', () => {
     expect(discoverGames(dir)).toEqual([]);
   });
