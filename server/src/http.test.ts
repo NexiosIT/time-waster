@@ -22,10 +22,10 @@ const stubFetch = (async (input: string | URL | Request, init?: RequestInit) => 
 type Ctx = { base: string; db: Db; clock: { ms: number }; server: Server };
 const open: Server[] = [];
 
-async function setup(opts: { trustProxy?: boolean; fetchFn?: typeof fetch } = {}): Promise<Ctx> {
+async function setup(opts: { trustProxy?: boolean; fetchFn?: typeof fetch; playJs?: string } = {}): Promise<Ctx> {
   const db = openDb(':memory:');
   const clock = { ms: Date.UTC(2026, 10, 20, 12, 0, 0) };
-  const handler = createHandler({ db, fetchFn: opts.fetchFn ?? stubFetch, now: () => new Date(clock.ms), trustProxy: opts.trustProxy ?? false });
+  const handler = createHandler({ db, fetchFn: opts.fetchFn ?? stubFetch, now: () => new Date(clock.ms), trustProxy: opts.trustProxy ?? false, playJs: opts.playJs });
   const server = createServer(handler);
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
   open.push(server);
@@ -455,5 +455,55 @@ describe('web scores api', () => {
     const one = await (await fetch(c.base + '/v1/boards/galaxy')).text();
     expect(all).not.toContain('WebKim');
     expect(one).not.toContain('WebKim');
+  });
+});
+
+describe('play page and assets', () => {
+  const PAGE_CSP = "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+
+  test('/play/<game> is a page with its own CSP allowing same-origin scripts', async () => {
+    const c = await setup();
+    const res = await fetch(c.base + '/play/galaxy');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toMatch(/^text\/html/);
+    const csp = res.headers.get('content-security-policy') ?? '';
+    expect(csp).toContain("script-src 'self'");
+    expect(csp).toContain("connect-src 'self'");
+    expect(csp).toContain("default-src 'none'");
+    expect(await res.text()).toContain('data-game="galaxy"');
+  });
+
+  test('the leaderboard pages keep exactly the no-script CSP', async () => {
+    const c = await setup();
+    for (const path of ['/', '/games/galaxy']) {
+      const res = await fetch(c.base + path);
+      expect(res.headers.get('content-security-policy')).toBe(PAGE_CSP);
+    }
+  });
+
+  test('unknown or odd play paths get the 404 page (Review Focus 3)', async () => {
+    const c = await setup();
+    for (const path of ['/play/nope', '/play/..%2Fx', '/play/', '/play/galaxy/x']) {
+      const res = await fetch(c.base + path);
+      expect(res.status).toBe(404);
+      expect(res.headers.get('content-security-policy')).toBe(PAGE_CSP);
+    }
+  });
+
+  test('/assets/play.js serves the injected bundle as JavaScript; without one it is 404', async () => {
+    const c = await setup({ playJs: 'console.log(1)' });
+    const res = await fetch(c.base + '/assets/play.js?v=abc');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('text/javascript; charset=utf-8');
+    expect(res.headers.get('cache-control')).toContain('immutable');
+    expect(await res.text()).toBe('console.log(1)');
+    const none = await setup();
+    expect((await fetch(none.base + '/assets/play.js')).status).toBe(404);
+  });
+
+  test('the game page shows the web top 10', async () => {
+    const c = await setup();
+    await post(c, '/v1/web-scores', { game: 'galaxy', name: 'WebKim', score: 10 });
+    expect(await (await fetch(c.base + '/games/galaxy')).text()).toContain('WebKim');
   });
 });

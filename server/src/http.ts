@@ -11,19 +11,23 @@ import {
   maxScoreFor,
 } from './limits';
 import { RateLimiter } from './ratelimit';
-import { knownGames, renderBoard, renderIndex, renderNotFound } from './pages';
+import { knownGames, renderBoard, renderIndex, renderNotFound, renderPlay } from './pages';
 
-export type HandlerDeps = { db: Db; fetchFn: typeof fetch; now: () => Date; trustProxy: boolean };
+export type HandlerDeps = {
+  db: Db; fetchFn: typeof fetch; now: () => Date; trustProxy: boolean;
+  /** The browser play bundle served at /assets/play.js; absent means 404. */
+  playJs?: string;
+};
 
-/** `html` replies are pages; everything else is JSON. */
-type Reply = { status: number; body?: unknown; html?: string };
+/** `html` replies are pages, `js` is the play bundle; everything else is JSON. */
+type Reply = { status: number; body?: unknown; html?: string; js?: string; headers?: Record<string, string> };
 class TooLarge extends Error {}
 
 const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
 const isObject = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v);
 
-const PAGE_HEADERS = {
+const PAGE_HEADERS: Record<string, string> = {
   'content-type': 'text/html; charset=utf-8',
   // No scripts, no external anything: the pages are static HTML with inline styles.
   'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
@@ -31,10 +35,27 @@ const PAGE_HEADERS = {
   'referrer-policy': 'no-referrer',
 };
 
-function send(res: ServerResponse, { status, body, html }: Reply, extra: Record<string, string> = {}): void {
+// The play page may run its one same-origin script and talk to this server; nothing else.
+const PLAY_HEADERS: Record<string, string> = {
+  ...PAGE_HEADERS,
+  'content-security-policy':
+    "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+};
+const JS_HEADERS: Record<string, string> = {
+  'content-type': 'text/javascript; charset=utf-8',
+  'cache-control': 'public, max-age=31536000, immutable',
+  'x-content-type-options': 'nosniff',
+};
+
+function send(res: ServerResponse, { status, body, html, js, headers }: Reply, extra: Record<string, string> = {}): void {
   if (html !== undefined) {
-    res.writeHead(status, { ...PAGE_HEADERS, ...extra });
+    res.writeHead(status, { ...(headers ?? PAGE_HEADERS), ...extra });
     res.end(html);
+    return;
+  }
+  if (js !== undefined) {
+    res.writeHead(status, { ...JS_HEADERS, ...extra });
+    res.end(js);
     return;
   }
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', ...extra });
@@ -108,7 +129,7 @@ function invalidScore(body: Record<string, unknown>, nowMs: number): string | nu
 }
 
 export function createHandler(deps: HandlerDeps): (req: IncomingMessage, res: ServerResponse) => void {
-  const { db, fetchFn, now, trustProxy } = deps;
+  const { db, fetchFn, now, trustProxy, playJs } = deps;
   const limit = (r: { limit: number; windowMs: number }) => new RateLimiter(r.limit, r.windowMs);
   const submitLimit = limit(RATE.submitPerPlayer);
   const loginIdLimit = limit(RATE.loginPerGithubId);
@@ -197,7 +218,15 @@ export function createHandler(deps: HandlerDeps): (req: IncomingMessage, res: Se
     if (method === 'GET' && path.startsWith('/games/')) {
       const game = knownGames().find((g) => g.id === path.slice('/games/'.length));
       if (!game) return { status: 404, html: renderNotFound() };
-      return { status: 200, html: renderBoard(game, board(db, game.id, BOARD_LIMIT).top) };
+      return { status: 200, html: renderBoard(game, board(db, game.id, BOARD_LIMIT).top, webBoard(db, game.id, BOARD_LIMIT)) };
+    }
+    if (method === 'GET' && path.startsWith('/play/')) {
+      const game = knownGames().find((g) => g.id === path.slice('/play/'.length));
+      if (!game) return { status: 404, html: renderNotFound() };
+      return { status: 200, html: renderPlay(game, webBoard(db, game.id, BOARD_LIMIT)), headers: PLAY_HEADERS };
+    }
+    if (method === 'GET' && path === '/assets/play.js') {
+      return playJs === undefined ? { status: 404, body: { error: 'not found' } } : { status: 200, js: playJs };
     }
     if (method === 'POST' && path === '/v1/login') return login(req);
     if (method === 'POST' && path === '/v1/scores') return scores(req);
