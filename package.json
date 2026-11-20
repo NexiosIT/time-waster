@@ -11,6 +11,7 @@
     "test": "vitest run",
     "dev": "node scripts/build.mjs --outdir .dev && node .dev/arcade.js",
     "typecheck": "tsc --noEmit",
+    "build:server": "node scripts/build.mjs --outdir .dev && node scripts/build-server.mjs",
     "test:mod": "node scripts/test-mod.mjs"
   },
   "devDependencies": {

@@ -9,7 +9,7 @@ instructions: "Read docs/adding-a-game.md and build me a game called ...".
 
 - Touch **only** `src/games/<id>/`. No edits to `src/core/`, other games, `dist/`, `package.json`
   or any generated file.
-- `<id>` is the folder name and the high-score key. It must match `/^[a-z0-9-]+$/`.
+- `<id>` is the folder name and the high-score key. It must match `/^[a-z0-9-]{1,32}$/` (at most 32 characters; the score server uses the same rule).
 - Start by copying `src/games/worm/` (it is the reference implementation) and renaming.
 - Use only **single-width characters**. No emoji and no wide CJK: they take two cells
   and break the column layout. Box-drawing and block characters (`█ ▓ ● ─ │`) are fine.
@@ -46,6 +46,13 @@ interface Game<S> {
   isOver(state: S): boolean;                 // true ends the run; score is saved
 }
 ```
+
+### `maxScore` (optional)
+
+A game may also set `maxScore: number`, the highest score a run can possibly reach. The
+online leaderboard refuses any submitted score above it, so set it to a true upper bound
+(worm uses `5220`: 29 x 18 cells x 10 points per dot). Leave it out and the server accepts
+scores up to `1_000_000`. It has no effect on local play or the local high-score file.
 
 `Key` is a normalised name: `up | down | left | right | space | enter | escape |
 backspace | tab`, or a single lowercase letter, digit or symbol (`'a'`, `'1'`, `'-'`).
@@ -107,6 +114,9 @@ npm run dev -- <id>     # build into .dev/ (git-ignored), then start the arcade 
 npm test                # run all tests
 npm run typecheck       # type-check before you finish
 ```
+
+The arcade runs on Node 20 or newer, but `npm test` also runs the score server's tests,
+which use `node:sqlite`: develop with Node 22.13 or newer.
 
 Write `src/games/<id>/<id>.test.ts` and test **through the contract** with a fixed seed,
 like `src/games/worm/worm.test.ts`:

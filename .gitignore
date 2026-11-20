@@ -3,3 +3,4 @@ src/games/registry.generated.ts
 .superpowers/
 .idea/
 .dev/
+server/dist/

@@ -59,10 +59,15 @@ export function loadJson<T>(file: string, isValid: (data: unknown) => data is T)
 }
 
 export function writeAtomic(file: string, data: unknown): void {
+  writeTextAtomic(file, JSON.stringify(data, null, 2));
+}
+
+/** Writes text via a temp file and rename so readers never see a half-written file. */
+export function writeTextAtomic(file: string, text: string): void {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = `${file}.${process.pid}.tmp`;
   try {
-    fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
+    fs.writeFileSync(tmp, text);
     withRetry(() => fs.renameSync(tmp, file));
   } catch (err) {
     try {

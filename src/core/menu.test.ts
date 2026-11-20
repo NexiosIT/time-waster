@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { lengthLabel, rowSegments, taskLine } from './menu';
+import { lengthLabel, onlineHeader, rowSegments, shortNumber, taskLine } from './menu';
 import type { Expected } from './length';
 
 const est = (min: number, isNew = true): Expected => ({ ms: min * 60_000, basis: 'est', isNew });
@@ -53,5 +53,24 @@ describe('rowSegments', () => {
     const line = lay(rowSegments({ selected: false, title: 'Delta', expected: null, suggested: false, best: '-' }));
     expect(line).not.toContain('min');
     expect(line).not.toContain('NEW');
+  });
+});
+
+describe('online columns', () => {
+  it('shows numbers under Best / World headings, with short forms that never cut digits', () => {
+    expect(onlineHeader().map((s) => s.text)).toEqual(['Best', 'World']);
+    const segs = rowSegments({ selected: false, title: 'Worm', expected: null, suggested: false, best: '655', world: '910' });
+    expect(segs.map((s) => s.text)).toEqual(expect.arrayContaining(['655', '910']));
+    expect(segs.some((s) => s.text.startsWith('Best'))).toBe(false);
+    expect(shortNumber('-')).toBe('-');
+    expect(shortNumber('99999')).toBe('99999');
+    expect(shortNumber('125000')).toBe('125k');
+    expect(shortNumber('1000000')).toBe('1.0M');
+    expect(shortNumber('1290000')).toBe('1.2M');
+  });
+
+  it('keeps the offline layout when there is no world value', () => {
+    const segs = rowSegments({ selected: false, title: 'Worm', expected: null, suggested: false, best: '655' });
+    expect(segs.some((s) => s.text === 'Best 655')).toBe(true);
   });
 });

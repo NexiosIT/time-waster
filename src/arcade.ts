@@ -3,7 +3,9 @@ import { parseKeys } from './core/keys';
 import { ENTER_ALT, LEAVE_ALT, renderDiff } from './core/render';
 import { EventWatcher, readRecentEvents, trimEvents } from './core/events';
 import { TASK_MAX_AGE_MS } from './core/task';
-import { aliveFile, eventsFile, runsFile, scoresFile } from './core/paths';
+import { accountFile, aliveFile, eventsFile, outboxFile, runsFile, scoresFile } from './core/paths';
+import { onlineConfig } from './core/online/config';
+import { Online } from './core/online/online';
 import { BEAT_MS, clearAlive, touchAlive } from './core/alive';
 import type { CellBuffer } from './core/buffer';
 import { games } from './games/registry.generated';
@@ -14,7 +16,9 @@ if (!process.stdout.isTTY || !process.stdin.isTTY) {
 }
 
 try { trimEvents(eventsFile()); } catch { /* ignore */ }
-const app = new App({ games, scoresFile: scoresFile(), runsFile: runsFile(), nowMs: Date.now(), startGameId: process.argv[2] });
+const cfg = onlineConfig(process.env);
+const online = cfg ? new Online({ ...cfg, accountFile: accountFile(), outboxFile: outboxFile() }) : undefined;
+const app = new App({ games, scoresFile: scoresFile(), runsFile: runsFile(), nowMs: Date.now(), startGameId: process.argv[2], online });
 const watcher = new EventWatcher(eventsFile(), (ev) => app.onEvent(ev, Date.now()));
 watcher.start();
 try {
@@ -64,7 +68,12 @@ process.stdout.on('resize', () => { prev = null; });
 timer = setInterval(() => {
   const now = Date.now();
   app.tick(now);
-  const buf = app.render(process.stdout.columns || 80, process.stdout.rows || 24, now);
+  let buf: CellBuffer;
+  try {
+    buf = app.render(process.stdout.columns || 80, process.stdout.rows || 24, now);
+  } catch {
+    return; // an unexpected render error skips this frame instead of closing the arcade
+  }
   const out = renderDiff(prev, buf);
   if (out) process.stdout.write(out);
   prev = buf;
