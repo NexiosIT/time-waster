@@ -119,13 +119,13 @@ function update(state: DriftState, ctx: GameContext): DriftState {
 }
 
 const READOUT_MAX_X = 57;
+const LABEL: Record<Effect['kind'], string> =
+  { double: '×2', grip: 'G', rain: '$', nitro: 'N', shield: 'S', slick: 'SLICK' };
 
 function drawReadout(effects: Effect[], screen: Screen): void {
-  const LABEL: Record<Effect['kind'], string> =
-    { double: '×2', grip: 'G', rain: '$', nitro: 'N', shield: 'S', slick: 'SLICK' };
   let x = 2;
   for (const e of effects) {
-    const color = e.kind === 'slick' ? 'brightRed' :POWER_LOOK[e.kind].color;
+    const color = e.kind === 'slick' ? 'brightRed' : POWER_LOOK[e.kind].color;
     const filled = Math.ceil(4 * e.ticksLeft / DURATION[e.kind]);
     const text = `${LABEL[e.kind]} ${'█'.repeat(filled)}${'░'.repeat(4 - filled)} `;
     for (const ch of text) {

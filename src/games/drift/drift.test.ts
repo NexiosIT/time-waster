@@ -2,9 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { createRandom } from '../../core/random';
 import type { GameContext } from '../../core/types';
 import { clearanceFor, isBlocked, type Point } from './arena';
-import { angleDiff, COINS_TO_MAX, headingAngle, speedForCoins, START_SPEED, TICK_MS } from './physics';
+import { angleDiff, COINS_TO_MAX, GRIP_SLOW, headingAngle, speedForCoins, START_SPEED, TICK_MS } from './physics';
 import { hasEffect } from './effects';
-import { GRIP_SLOW } from './physics';
 import { POWER_LIFE } from './powerups';
 import drift, { cellOf, TRAIL_LEN, type DriftState } from './index';
 
@@ -225,6 +224,7 @@ describe('drift', () => {
       });
       for (let i = 0; i < 100 && !s.crashed && s.x <= 30; i++) s = drift.update(s, c);
       expect(s.crashed).toBe(true);
+      expect(cellOf(s).y).toBeLessThanOrEqual(12);
     });
 
     it('crash wins over a power-up in the same cell', () => {
