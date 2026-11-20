@@ -1,0 +1,4 @@
+node_modules/
+src/games/registry.generated.ts
+.superpowers/
+.idea/
