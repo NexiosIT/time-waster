@@ -20,10 +20,10 @@ const stubFetch = (async (input: string | URL | Request, init?: RequestInit) => 
 type Ctx = { base: string; db: Db; clock: { ms: number }; server: Server };
 const open: Server[] = [];
 
-async function setup(opts: { trustProxy?: boolean } = {}): Promise<Ctx> {
+async function setup(opts: { trustProxy?: boolean; fetchFn?: typeof fetch } = {}): Promise<Ctx> {
   const db = openDb(':memory:');
   const clock = { ms: Date.UTC(2026, 10, 20, 12, 0, 0) };
-  const handler = createHandler({ db, fetchFn: stubFetch, now: () => new Date(clock.ms), trustProxy: opts.trustProxy ?? false });
+  const handler = createHandler({ db, fetchFn: opts.fetchFn ?? stubFetch, now: () => new Date(clock.ms), trustProxy: opts.trustProxy ?? false });
   const server = createServer(handler);
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
   open.push(server);
@@ -162,6 +162,29 @@ describe('http api', () => {
     setBlocked(c.db, 'alice', true);
     expect((await score(c, t, {})).status).toBe(403);
     expect((await post(c, '/v1/login', { githubToken: 'gh-alice' })).status).toBe(403);
+  });
+
+  test('blocked players get 403 on DELETE /v1/me and stay blocked', async () => {
+    const c = await setup();
+    const t = await login(c, 'gh-alice');
+    setBlocked(c.db, 'alice', true);
+    expect((await fetch(`${c.base}/v1/me`, { method: 'DELETE', headers: bearer(t) })).status).toBe(403);
+    const row = c.db.raw.prepare('SELECT blocked FROM players WHERE id = 1').get() as { blocked: number } | undefined;
+    expect(row?.blocked).toBe(1);
+    expect((await post(c, '/v1/login', { githubToken: 'gh-alice' })).status).toBe(403);
+  });
+
+  test('GitHub unreachable or timing out during login is 502 with a JSON error', async () => {
+    const failing = (async () => { throw new TypeError('fetch failed'); }) as typeof fetch;
+    const c = await setup({ fetchFn: failing });
+    const res = await post(c, '/v1/login', { githubToken: 'gh-alice' });
+    expect(res.status).toBe(502);
+    expect(res.headers.get('content-type')).toMatch(/^application\/json/);
+    expect(await res.json()).toEqual({ error: expect.any(String) });
+
+    const timingOut = (async () => { throw new DOMException('timed out', 'TimeoutError'); }) as typeof fetch;
+    const c2 = await setup({ fetchFn: timingOut });
+    expect((await post(c2, '/v1/login', { githubToken: 'gh-alice' })).status).toBe(502);
   });
 
   test('boards work without login; with login they include me', async () => {

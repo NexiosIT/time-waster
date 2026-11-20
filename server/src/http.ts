@@ -96,7 +96,12 @@ export function createHandler(deps: HandlerDeps): (req: IncomingMessage, res: Se
     const ms = date.getTime();
     if (!loginGlobalLimit.hit('*', ms)) return { status: 429, body: { error: 'too many logins' } };
     if (trustProxy && !loginIpLimit.hit(clientIp(req), ms)) return { status: 429, body: { error: 'too many logins' } };
-    const gh = await verifyGithubToken(githubToken, fetchFn);
+    let gh: { id: number; login: string } | null;
+    try {
+      gh = await verifyGithubToken(githubToken, fetchFn);
+    } catch {
+      return { status: 502, body: { error: 'GitHub unreachable' } };
+    }
     if (!gh) return { status: 401, body: { error: 'GitHub rejected the token' } };
     if (!loginIdLimit.hit(String(gh.id), ms)) return { status: 429, body: { error: 'too many logins' } };
     if (upsertPlayer(db, gh, date).blocked) return { status: 403, body: { error: 'blocked' } };
@@ -136,6 +141,7 @@ export function createHandler(deps: HandlerDeps): (req: IncomingMessage, res: Se
     if (method === 'DELETE' && path === '/v1/me') {
       const player = sessionPlayer(req);
       if (!player) return { status: 401, body: { error: 'sign in required' } };
+      if (player.blocked) return { status: 403, body: { error: 'blocked; ask the admin to erase your data' } };
       deletePlayer(db, player.id);
       return { status: 204 };
     }
