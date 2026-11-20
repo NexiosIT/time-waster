@@ -15,7 +15,8 @@ long, barely-controlled slide later in the run.
 - Steering is the only input. The car moves on its own.
 - A believable drift: the car's nose (heading) and its direction of travel can differ,
   and travel catches up with the nose more slowly the faster you go.
-- Speed rises smoothly over the run, so every run ends in increasingly scary slides.
+- Every coin collected makes the car faster, so success itself raises the stakes and
+  every run ends in increasingly scary slides.
 - Each run feels a little different (random pillar layout).
 - Fits the existing game contract: one folder, `src/games/drift/`, no shared files touched.
 
@@ -96,9 +97,14 @@ Chosen: 1, because the point of the game is the feel of a slide getting away fro
 
 ### Speed ramp
 
-- Speed rises smoothly with elapsed run time (using `ctx.elapsedMs`) from a gentle start
-  to a maximum reached after about two minutes, then holds at that maximum.
-- Collecting coins does not change speed.
+- Speed is driven by coins collected, not by time. Each coin raises the speed by one
+  step, from a gentle start up to a maximum reached after roughly 20 coins; after that
+  it holds at the maximum.
+- The steps get smaller as speed rises (for example a fixed fraction of the remaining
+  gap to the maximum), so early coins are clearly felt and late-game speed doesn't
+  run away.
+- Speed does not change between coins: a player who drives around carefully stays at
+  the same speed until they take the next coin.
 
 ### Coins and score
 
@@ -113,8 +119,8 @@ Chosen: 1, because the point of the game is the feel of a slide getting away fro
 Through the contract with a fixed seed, as in `src/games/worm/worm.test.ts`: initial
 state; `onKey` and `update` don't mutate input; left/right rotate the heading by one step
 and other keys do nothing; travel direction converges to heading and does so more slowly
-at higher speed; speed rises with elapsed time and caps; collecting a coin adds 10 and
-respawns it in a valid cell; hitting the wall or a pillar ends the run; a fast car
+at higher speed; speed stays constant between coins, rises with each coin and caps;
+collecting a coin adds 10 and respawns it in a valid cell; hitting the wall or a pillar ends the run; a fast car
 cannot pass through a 1-cell pillar; generated pillars respect the start safe zone and
 gaps.
 
@@ -129,14 +135,12 @@ gaps.
   wins (the coin is not counted).
 - If the heading is exactly opposite the travel direction, travel turns the same way as
   the last steering press.
-- Speed is driven by `ctx.elapsedMs`; under heavy lag the host may drop ticks while time
-  keeps counting. Accepted: the effect is negligible in normal play.
 
 ## Left to the builder
 
-- Exact tuning numbers: start/max speed, ramp duration (about two minutes), grip curve,
-  number and size of pillars, safe-zone size, minimum coin distance, trail length and
-  drift-angle threshold. Aim: the first 20-30 seconds feel relaxed, and runs past two
-  minutes are rare but possible.
+- Exact tuning numbers: start/max speed, size of each per-coin step (max reached around
+  20 coins), grip curve, number and size of pillars, safe-zone size, minimum coin
+  distance, trail length and drift-angle threshold. Aim: the first 5 or so coins feel
+  relaxed, and reaching 20+ coins is rare but possible.
 - Colours (keep to the 16 ANSI names), and the glyphs for pillars and trail.
 - Internal code structure within `src/games/drift/`.
