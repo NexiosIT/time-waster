@@ -1,4 +1,4 @@
-import { Api, type BoardRow } from './api';
+import { Api, type ApiResult, type BoardRow } from './api';
 import { pollDeviceToken, requestDeviceCode } from './github';
 import {
   appendOutbox,
@@ -27,7 +27,8 @@ export type BoardView =
 export interface OnlinePort {
   account(): { login: string } | null;
   worldBest(game: string): { login: string; score: number } | null;
-  refreshWorldBest(nowMs: number): void;
+  /** Fetches the world bests of `games` (the ids the arcade shows), at most once a minute. */
+  refreshWorldBest(nowMs: number, games: string[]): void;
   loadBoard(game: string): void;
   board(game: string): BoardView;
   recordRun(game: string, score: number, at: Date): void;
@@ -35,10 +36,22 @@ export interface OnlinePort {
   signIn(): SignIn;
   startSignIn(): void;
   cancelSignIn(): void;
+  /**
+   * Signs out. With deleteScores, stays signed in until the server confirms the delete; if it fails,
+   * the account and unsent runs are kept and accountMessage() says why.
+   */
   signOut(deleteScores: boolean): void;
+  /** A line for the account screen (delete in progress or failed), or null. */
+  accountMessage(): string | null;
+  /** Forgets a failed-delete message (the account screen calls this when it opens). */
+  clearAccountMessage(): void;
 }
 
 const REFRESH_MS = 60_000;
+const MAX_BOARD_GAMES = 50; // the server's limit for one GET /v1/boards
+const DELETING = 'Deleting your online scores...';
+const DELETE_FAILED = "Couldn't reach the score server. Your scores were not deleted.";
+const DELETE_BLOCKED = 'This account is blocked. Ask the admin to delete your scores.';
 const SLOW_DOWN_S = 5;
 
 /** Swallows any error from a file operation; online state must never crash the arcade. */
@@ -52,6 +65,22 @@ function safely<T>(op: () => T, fallback: T): T {
 
 function sameEntry(a: OutboxEntry | undefined, b: OutboxEntry): boolean {
   return !!a && a.game === b.game && a.score === b.score && a.at === b.at;
+}
+
+/** Runs an Api call so that nothing escapes: a throw or rejection becomes a network failure. */
+function background<T>(call: () => Promise<ApiResult<T>>): Promise<ApiResult<T>> {
+  try {
+    return call().catch(() => NETWORK_FAIL);
+  } catch {
+    return Promise.resolve(NETWORK_FAIL);
+  }
+}
+const NETWORK_FAIL = { ok: false, status: 'network' } as const;
+
+function loginFailure(status: number | 'network'): string {
+  if (status === 403) return 'This GitHub account is blocked';
+  if (status === 429) return 'Too many sign-ins, try again later';
+  return "Couldn't reach the score server";
 }
 
 /** Worth retrying later (kept in the outbox). Any other answer means sent or refused for good. */
@@ -77,6 +106,8 @@ export class Online implements OnlinePort {
   private signInGen = 0;
   private flushing: Promise<void> | null = null;
   private flushAgain = false;
+  private deleting: Account | null = null;
+  private acctMessage: string | null = null;
 
   constructor(opts: {
     serverUrl: string;
@@ -109,15 +140,13 @@ export class Online implements OnlinePort {
     return b && typeof b.login === 'string' && typeof b.score === 'number' ? { login: b.login, score: b.score } : null;
   }
 
-  refreshWorldBest(nowMs: number): void {
+  refreshWorldBest(nowMs: number, games: string[]): void {
+    if (!games.length) return;
     if (this.lastRefreshMs !== null && nowMs - this.lastRefreshMs < REFRESH_MS) return;
     this.lastRefreshMs = nowMs;
-    this.api.boards().then(
-      (r) => {
-        if (r.ok) this.bests = r.value;
-      },
-      () => {},
-    );
+    background(() => this.api.boards(games.slice(0, MAX_BOARD_GAMES))).then((r) => {
+      if (r.ok) this.bests = r.value;
+    });
   }
 
   loadBoard(game: string): void {
@@ -170,6 +199,7 @@ export class Online implements OnlinePort {
     if (!acct) return;
     for (;;) {
       if (this.acct !== acct) return; // signed out meanwhile
+      if (this.deleting) return; // runs wait until the delete is done (kept if it fails)
       const head = safely(() => readOutbox(this.outboxFile), [])[0];
       if (!head) return;
       const r = await this.api.submit(acct.token, head);
@@ -220,7 +250,7 @@ export class Online implements OnlinePort {
       if (poll.status === 'ok') {
         const r = await this.api.login(poll.token);
         if (!live()) return;
-        if (!r.ok) return failed("Couldn't reach the score server");
+        if (!r.ok) return failed(loginFailure(r.status));
         const acct: Account = { serverUrl: this.serverUrl, token: r.value.token, login: r.value.login };
         safely(() => saveAccount(this.accountFile, acct), undefined);
         this.acct = acct;
@@ -244,15 +274,37 @@ export class Online implements OnlinePort {
   signOut(deleteScores: boolean): void {
     const acct = this.acct;
     if (!acct) return;
-    this.acct = null; // signed out for the UI right away
     if (!deleteScores) {
+      this.acct = null; // signed out for the UI right away
+      this.deleting = null;
+      this.acctMessage = null;
+      // End the session on the server too; nobody waits for the answer.
+      void background(() => this.api.signOutSession(acct.token));
       this.clearFiles(acct);
       return;
     }
-    this.api.deleteMe(acct.token).then(
-      () => this.clearFiles(acct),
-      () => this.clearFiles(acct),
-    );
+    if (this.deleting) return;
+    this.deleting = acct;
+    this.acctMessage = null;
+    background(() => this.api.deleteMe(acct.token)).then((r) => {
+      if (this.deleting !== acct) return; // signed out (S) meanwhile
+      this.deleting = null;
+      // 401: the session or account is already gone, which is what was asked for.
+      if (r.ok || r.status === 401) {
+        if (this.acct === acct) this.clearLocal();
+        return;
+      }
+      this.acctMessage = r.status === 403 ? DELETE_BLOCKED : DELETE_FAILED;
+      void this.flush(); // runs held back during the delete
+    });
+  }
+
+  accountMessage(): string | null {
+    return this.deleting ? DELETING : this.acctMessage;
+  }
+
+  clearAccountMessage(): void {
+    this.acctMessage = null;
   }
 
   private clearLocal(): void {

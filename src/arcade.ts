@@ -63,7 +63,12 @@ process.stdout.on('resize', () => { prev = null; });
 timer = setInterval(() => {
   const now = Date.now();
   app.tick(now);
-  const buf = app.render(process.stdout.columns || 80, process.stdout.rows || 24, now);
+  let buf: CellBuffer;
+  try {
+    buf = app.render(process.stdout.columns || 80, process.stdout.rows || 24, now);
+  } catch {
+    return; // an unexpected render error skips this frame instead of closing the arcade
+  }
   const out = renderDiff(prev, buf);
   if (out) process.stdout.write(out);
   prev = buf;

@@ -35,12 +35,16 @@ export function drawSignIn(area: CellBuffer, s: SignIn): void {
   centre(area, 18, 'Esc: back', 'gray');
 }
 
-export function drawAccount(area: CellBuffer, login: string, confirming: boolean): void {
+export function drawAccount(area: CellBuffer, login: string, confirming: boolean, message: string | null = null): void {
   centre(area, 6, `Signed in as ${clean(login, LOGIN_MAX)}`, 'brightWhite');
   // The hint is wider than the area: break it before its last item.
   centre(area, 9, 'S: sign out · D: sign out and delete my online scores', 'gray');
   centre(area, 10, 'Esc: back', 'gray');
   if (confirming) centre(area, 13, 'Delete all your online scores? Y/N', 'brightYellow');
+  else if (message) {
+    // One sentence per row: the messages are wider than the area.
+    clean(message, 200).split(/(?<=\.) /).slice(0, 3).forEach((line, i) => centre(area, 13 + i, line, 'brightYellow'));
+  }
 }
 
 /** Rows 5..17 of the results area. */

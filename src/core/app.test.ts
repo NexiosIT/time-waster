@@ -34,9 +34,14 @@ function play(app: App, from = 100, to = 1000) { for (let t = from; t <= to; t +
 
 describe('App', () => {
   it('menu lists titles alphabetically, hides invalid and duplicate ids', () => {
-    const app = mk([fake('b', 'Beta'), fake('a', 'Alpha'), fake('Bad Id', 'Zed'), fake('a', 'Dup')]);
+    const app = mk([
+      fake('b', 'Beta'), fake('a', 'Alpha'), fake('Bad Id', 'Zed'), fake('a', 'Dup'),
+      fake('x'.repeat(33), 'Long'), fake('y'.repeat(32), 'Max'),
+    ]);
     const r = rows(app);
     expect(has(r, 'ARCADE')).toBe(true);
+    expect(r.join('\n')).not.toContain('Long'); // ids are 1-32 characters
+    expect(r.join('\n')).toContain('Max');
     const text = r.join('\n');
     expect(text.indexOf('Alpha')).toBeLessThan(text.indexOf('Beta'));
     expect(text).not.toContain('Zed');
@@ -267,9 +272,11 @@ class FakeOnline implements OnlinePort {
   boards: Record<string, BoardView> = {};
   state: SignIn = { phase: 'idle' };
   calls: string[] = [];
+  refreshedGames: string[][] = [];
+  message: string | null = null;
   account() { return this.acct; }
   worldBest(game: string) { return this.bests[game] ?? null; }
-  refreshWorldBest(nowMs: number) { this.calls.push(`refresh ${nowMs}`); }
+  refreshWorldBest(nowMs: number, games: string[]) { this.calls.push(`refresh ${nowMs}`); this.refreshedGames.push(games); }
   loadBoard(game: string) { this.calls.push(`load ${game}`); }
   board(game: string): BoardView { return this.boards[game] ?? { status: 'loading' }; }
   recordRun(game: string, score: number, at: Date) { this.calls.push(`record ${game} ${score} ${at instanceof Date}`); }
@@ -278,6 +285,8 @@ class FakeOnline implements OnlinePort {
   startSignIn() { this.calls.push('start'); this.state = { phase: 'starting' }; }
   cancelSignIn() { this.calls.push('cancel'); this.state = { phase: 'idle' }; }
   signOut(deleteScores: boolean) { this.calls.push(`signOut ${deleteScores}`); this.acct = null; }
+  accountMessage() { return this.message; }
+  clearAccountMessage() { this.calls.push('clearMessage'); this.message = null; }
 }
 
 const LOGIN39 = 'L'.repeat(38) + 'Z';
@@ -377,12 +386,21 @@ describe('App online', () => {
     app.key('escape', 0);
     expect(has(rows(app), 'Signed in as robin')).toBe(true);
     expect(online.calls.filter((c) => c.startsWith('signOut'))).toEqual([]);
+    // The delete is asynchronous: the account screen stays until the account is gone.
+    online.signOut = (d: boolean) => { online.calls.push(`signOut ${d}`); online.message = 'Deleting your online scores...'; };
     app.key('d', 0);
     app.key('y', 0);
     expect(online.calls).toContain('signOut true');
     r = rows(app);
+    expect(has(r, 'Signed in as robin')).toBe(true);
+    expect(has(r, 'Delete all')).toBe(false);
+    expect(has(r, 'Deleting your online scores...')).toBe(true);
+    online.acct = null; // the server confirmed
+    online.message = null;
+    r = rows(app);
     expect(has(r, 'ARCADE')).toBe(true);
     expect(has(r, 'O: share scores online')).toBe(true);
+    online.signOut = FakeOnline.prototype.signOut;
 
     // S signs out without deleting; Esc goes back to the menu
     online.acct = { login: 'robin' };
@@ -540,5 +558,46 @@ describe('App online', () => {
     app.key('o', 0);
     expect(() => rows(app)).not.toThrow();
     expect(has(rows(app), 'Asking GitHub...')).toBe(true);
+  });
+
+  it('a failed delete stays on the account screen with the message; reopening clears it', () => {
+    const online = new FakeOnline();
+    online.acct = { login: 'robin' };
+    online.signOut = (d: boolean) => {
+      online.calls.push(`signOut ${d}`);
+      online.message = "Couldn't reach the score server. Your scores were not deleted.";
+    };
+    const app = mk([fake('a', 'Alpha')], { online });
+    app.key('o', 0);
+    expect(online.calls).toContain('clearMessage');
+    app.key('d', 0);
+    app.key('y', 0);
+    let r = rowsAt(app);
+    insideArea(r);
+    expect(has(r, 'Signed in as robin')).toBe(true);
+    expect(has(r, "Couldn't reach the score server.")).toBe(true);
+    expect(has(r, 'Your scores were not deleted.')).toBe(true);
+    app.key('escape', 0);
+    expect(has(rows(app), 'ARCADE')).toBe(true);
+    online.calls = [];
+    app.key('o', 0);
+    expect(online.calls).toContain('clearMessage');
+    r = rows(app);
+    expect(has(r, 'not deleted')).toBe(false);
+
+    online.message = 'This account is blocked. Ask the admin to delete your scores.';
+    r = rowsAt(app);
+    insideArea(r);
+    expect(has(r, 'This account is blocked.')).toBe(true);
+    expect(has(r, 'Ask the admin to delete your scores.')).toBe(true);
+  });
+
+  it('world bests are refreshed for the games the arcade shows', () => {
+    const online = new FakeOnline();
+    const app = mk([fake('b', 'Beta'), fake('a', 'Alpha'), fake('Bad Id', 'Zed')], { online, nowMs: 5 });
+    expect(online.refreshedGames).toEqual([['a', 'b']]);
+    app.key('o', 0);
+    app.key('escape', 0);
+    expect(online.refreshedGames.at(-1)).toEqual(['a', 'b']);
   });
 });

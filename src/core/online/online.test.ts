@@ -34,6 +34,7 @@ function fakeApi(f: FakeApi): Api {
     board: f.board ?? network,
     boards: f.boards ?? network,
     deleteMe: f.deleteMe ?? network,
+    signOutSession: f.signOutSession ?? network,
   } as unknown as Api;
 }
 
@@ -109,6 +110,21 @@ describe('Online', () => {
         fetchFn: githubFetch([{ access_token: 'gho' }]),
         api: fakeApi({ login: async () => fail('network') }),
         message: "Couldn't reach the score server",
+      },
+      {
+        fetchFn: githubFetch([{ access_token: 'gho' }]),
+        api: fakeApi({ login: async () => fail(500) }),
+        message: "Couldn't reach the score server",
+      },
+      {
+        fetchFn: githubFetch([{ access_token: 'gho' }]),
+        api: fakeApi({ login: async () => fail(403) }),
+        message: 'This GitHub account is blocked',
+      },
+      {
+        fetchFn: githubFetch([{ access_token: 'gho' }]),
+        api: fakeApi({ login: async () => fail(429) }),
+        message: 'Too many sign-ins, try again later',
       },
       {
         fetchFn: githubFetch([{ error: 'authorization_pending' }], [], { ...defaultCode, interval: 5, expires_in: 12 }),
@@ -252,7 +268,7 @@ describe('Online', () => {
       })) as unknown as typeof fetch;
     const o = make({ api: new Api(SERVER, hanging, 50) });
     o.loadBoard('snake');
-    o.refreshWorldBest(0);
+    o.refreshWorldBest(0, ['snake']);
     const t0 = Date.now();
     expect(o.board('snake')).toEqual({ status: 'loading' });
     expect(o.worldBest('snake')).toBeNull();
@@ -280,20 +296,30 @@ describe('Online', () => {
     expect(tokens).toEqual(['tok']);
   });
 
-  it('refreshWorldBest is throttled to once per 60 s', async () => {
+  it('refreshWorldBest is throttled to once per 60 s and asks only for the given games', async () => {
     let calls = 0;
+    const asked: string[][] = [];
     const o = make({
-      api: fakeApi({ boards: async () => (calls++, ok({ snake: { login: 'amy', score: 42 } })) }),
+      api: fakeApi({ boards: async (games: string[]) => (calls++, asked.push(games), ok({ snake: { login: 'amy', score: 42 } })) }),
     });
     expect(o.worldBest('snake')).toBeNull();
-    o.refreshWorldBest(1_000);
+    o.refreshWorldBest(1_000, ['snake', 'tetris']);
     await settle();
     expect(o.worldBest('snake')).toEqual({ login: 'amy', score: 42 });
     expect(o.worldBest('tetris')).toBeNull();
-    o.refreshWorldBest(1_000 + 59_999);
+    o.refreshWorldBest(1_000 + 59_999, ['snake']);
     expect(calls).toBe(1);
-    o.refreshWorldBest(1_000 + 60_000);
+    o.refreshWorldBest(1_000 + 60_000, ['snake']);
     expect(calls).toBe(2);
+    expect(asked).toEqual([['snake', 'tetris'], ['snake']]);
+  });
+
+  it('refreshWorldBest with no games asks nothing', async () => {
+    let calls = 0;
+    const o = make({ api: fakeApi({ boards: async () => (calls++, ok({})) }) });
+    o.refreshWorldBest(0, []);
+    await settle();
+    expect(calls).toBe(0);
   });
 
   it('a failed refresh keeps the last known world bests', async () => {
@@ -301,43 +327,103 @@ describe('Online', () => {
     const o = make({
       api: fakeApi({ boards: async () => (n++ === 0 ? ok({ snake: { login: 'amy', score: 42 } }) : fail('network')) }),
     });
-    o.refreshWorldBest(0);
+    o.refreshWorldBest(0, ['snake']);
     await settle();
-    o.refreshWorldBest(60_000);
+    o.refreshWorldBest(60_000, ['snake']);
     await settle();
     expect(o.worldBest('snake')).toEqual({ login: 'amy', score: 42 });
   });
 
-  it('signOut(true) deletes online scores then clears the account', async () => {
+  it('signOut(true) deletes online scores, then clears the account on success (or 401: already gone)', async () => {
+    for (const answer of [ok(null), fail(401)] as ApiResult<null>[]) {
+      signedIn();
+      writeOutbox(outboxFile, [entry(1)]);
+      const order: string[] = [];
+      let finishDelete!: (r: ApiResult<null>) => void;
+      const o = make({
+        api: fakeApi({
+          submit: async () => fail(503),
+          deleteMe: (token: string) => {
+            order.push(`delete ${token}`);
+            return new Promise((r) => (finishDelete = r));
+          },
+        }),
+      });
+      await settle();
+      o.signOut(true);
+      expect(order).toEqual(['delete tok']);
+      // Still signed in until the server answers.
+      expect(o.account()).toEqual({ login: 'bob' });
+      expect(o.accountMessage()).toBe('Deleting your online scores...');
+      o.signOut(true); // a second request while one is running is ignored
+      expect(order).toEqual(['delete tok']);
+      finishDelete(answer);
+      await settle();
+      expect(o.account()).toBeNull();
+      expect(o.accountMessage()).toBeNull();
+      expect(loadAccount(accountFile)).toBeNull();
+      expect(readOutbox(outboxFile)).toEqual([]);
+    }
+  });
+
+  it('a failed delete keeps the account and outbox and says why', async () => {
+    const cases: [ApiResult<null>, string][] = [
+      [fail('network'), "Couldn't reach the score server. Your scores were not deleted."],
+      [fail(500), "Couldn't reach the score server. Your scores were not deleted."],
+      [fail(429), "Couldn't reach the score server. Your scores were not deleted."],
+      [fail(403), 'This account is blocked. Ask the admin to delete your scores.'],
+    ];
+    for (const [answer, message] of cases) {
+      signedIn();
+      writeOutbox(outboxFile, [entry(1)]);
+      const o = make({ api: fakeApi({ submit: async () => fail(503), deleteMe: async () => answer }) });
+      await settle();
+      o.signOut(true);
+      await settle();
+      expect(o.account()).toEqual({ login: 'bob' });
+      expect(o.accountMessage()).toBe(message);
+      expect(loadAccount(accountFile)).toEqual({ serverUrl: SERVER, token: 'tok', login: 'bob' });
+      expect(readOutbox(outboxFile)).toEqual([entry(1)]);
+      o.clearAccountMessage();
+      expect(o.accountMessage()).toBeNull();
+    }
+  });
+
+  it('no runs are sent while a delete is running', async () => {
     signedIn();
-    writeOutbox(outboxFile, [entry(1)]);
-    const order: string[] = [];
     let finishDelete!: (r: ApiResult<null>) => void;
+    const sent: number[] = [];
     const o = make({
       api: fakeApi({
-        submit: async () => fail(503),
-        deleteMe: (token: string) => {
-          order.push(`delete ${token}`);
-          return new Promise((r) => (finishDelete = r));
-        },
+        submit: async (_t: string, e: OutboxEntry) => (sent.push(e.score), ok({ best: 1, rank: 1 })),
+        deleteMe: () => new Promise((r) => (finishDelete = r)),
       }),
     });
     await settle();
     o.signOut(true);
-    expect(order).toEqual(['delete tok']);
-    expect(o.account()).toBeNull();
-    expect(loadAccount(accountFile)).not.toBeNull(); // file cleared only after the server answered
-    finishDelete(fail('network')); // cleared regardless of the result
+    o.recordRun('snake', 7, new Date());
     await settle();
-    expect(loadAccount(accountFile)).toBeNull();
-    expect(readOutbox(outboxFile)).toEqual([]);
+    expect(sent).toEqual([]);
+    finishDelete(fail('network'));
+    await settle();
+    await o.flush();
+    expect(sent).toEqual([7]);
   });
 
-  it('signOut(false) clears the account without calling the server', async () => {
+  it('signOut(false) ends the server session and clears the account without deleting scores', async () => {
     signedIn();
     let deletes = 0;
-    const o = make({ api: fakeApi({ deleteMe: async () => (deletes++, ok(null)), submit: async () => fail(503) }) });
+    const ended: string[] = [];
+    const o = make({
+      api: fakeApi({
+        deleteMe: async () => (deletes++, ok(null)),
+        submit: async () => fail(503),
+        signOutSession: (token: string) => (ended.push(token), new Promise(() => {})), // never answers
+      }),
+    });
     o.signOut(false);
+    expect(ended).toEqual(['tok']);
+    expect(loadAccount(accountFile)).toBeNull(); // does not wait for the server
     await settle();
     expect(deletes).toBe(0);
     expect(o.account()).toBeNull();
@@ -368,7 +454,10 @@ describe('Online', () => {
     // A directory where the files should be makes every read and write fail.
     fs.mkdirSync(accountFile);
     fs.mkdirSync(outboxFile);
-    const o = make({ api: fakeApi({ login: async () => ok({ token: 's', login: 'x' }) }), fetchFn: githubFetch([{ access_token: 'g' }]) });
+    const o = make({
+      api: fakeApi({ login: async () => ok({ token: 's', login: 'x' }), deleteMe: async () => ok(null) }),
+      fetchFn: githubFetch([{ access_token: 'g' }]),
+    });
     o.recordRun('snake', 1, new Date());
     o.startSignIn();
     await settle();
@@ -378,5 +467,19 @@ describe('Online', () => {
     o.signOut(true);
     await settle();
     expect(o.account()).toBeNull();
+  });
+
+  it('a throwing api never makes sign-out throw', async () => {
+    signedIn();
+    const boom = () => { throw new Error('boom'); };
+    const o = make({ api: fakeApi({ signOutSession: boom, submit: async () => fail(503) }) });
+    expect(() => o.signOut(false)).not.toThrow();
+    expect(o.account()).toBeNull();
+    signedIn();
+    const o2 = make({ api: fakeApi({ deleteMe: boom, submit: async () => fail(503) }) });
+    expect(() => o2.signOut(true)).not.toThrow();
+    await settle();
+    expect(o2.account()).toEqual({ login: 'bob' });
+    expect(o2.accountMessage()).toBe("Couldn't reach the score server. Your scores were not deleted.");
   });
 });

@@ -5,6 +5,30 @@ export type ApiResult<T> = { ok: true; value: T } | { ok: false; status: number 
 
 const NETWORK = { ok: false, status: 'network' } as const;
 
+// Everything from the server is checked before use: a bad row is dropped, never drawn.
+const LOGIN_RE = /^[A-Za-z0-9-]{1,39}$/;
+const GAME_RE = /^[a-z0-9-]{1,32}$/;
+const count = (v: unknown): v is number => Number.isSafeInteger(v) && (v as number) >= 0;
+const isLogin = (v: unknown): v is string => typeof v === 'string' && LOGIN_RE.test(v);
+
+function boardRow(r: any): BoardRow | null {
+  if (!count(r?.rank) || !count(r?.score) || !isLogin(r?.login)) return null;
+  return { rank: r.rank, login: r.login, score: r.score, at: typeof r.at === 'string' ? r.at : '' };
+}
+
+function rankAndScore(me: any): { rank: number; score: number } | null {
+  return count(me?.rank) && count(me?.score) ? { rank: me.rank, score: me.score } : null;
+}
+
+function worldBests(boards: unknown): Record<string, { login: string; score: number }> | null {
+  if (typeof boards !== 'object' || boards === null || Array.isArray(boards)) return null;
+  const out: Record<string, { login: string; score: number }> = {};
+  for (const [game, b] of Object.entries(boards as Record<string, any>)) {
+    if (GAME_RE.test(game) && isLogin(b?.login) && count(b?.score)) out[game] = { login: b.login, score: b.score };
+  }
+  return out;
+}
+
 export class Api {
   private readonly base: string;
 
@@ -62,14 +86,23 @@ export class Api {
   ): Promise<ApiResult<{ top: BoardRow[]; me: { rank: number; score: number } | null }>> {
     return this.call('GET', `/v1/boards/${encodeURIComponent(game)}`, {
       token,
-      map: (j) => (Array.isArray(j?.top) ? { top: j.top as BoardRow[], me: j.me ?? null } : null),
+      map: (j) =>
+        Array.isArray(j?.top)
+          ? { top: (j.top as unknown[]).map(boardRow).filter((r): r is BoardRow => r !== null), me: rankAndScore(j.me) }
+          : null,
     });
   }
 
-  boards(): Promise<ApiResult<Record<string, { login: string; score: number }>>> {
-    return this.call('GET', '/v1/boards', {
-      map: (j) => (typeof j?.boards === 'object' && j.boards !== null ? j.boards : null),
+  /** World bests for `games` only (the server takes up to 50 ids). */
+  boards(games: string[]): Promise<ApiResult<Record<string, { login: string; score: number }>>> {
+    return this.call('GET', `/v1/boards?games=${games.map(encodeURIComponent).join(',')}`, {
+      map: (j) => worldBests(j?.boards),
     });
+  }
+
+  /** Ends this session on the server (sign-out). */
+  signOutSession(token: string): Promise<ApiResult<null>> {
+    return this.call('DELETE', '/v1/session', { token, map: () => null });
   }
 
   deleteMe(token: string): Promise<ApiResult<null>> {

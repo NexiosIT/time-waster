@@ -28,7 +28,7 @@ interface Results {
   saveFailed: boolean;
 }
 
-const ID_RE = /^[a-z0-9-]+$/;
+const ID_RE = /^[a-z0-9-]{1,32}$/; // same rule as the score server
 const TOO_SMALL = 'Make the window bigger';
 const MENU_HINTS = '↑↓ select · Enter play · Q quit';
 
@@ -65,7 +65,7 @@ export class App {
     this.refreshBest();
     const start = opts.startGameId ? this.games.find((g) => g.id === opts.startGameId) : undefined;
     if (start) this.start(start, opts.nowMs);
-    else this.online?.refreshWorldBest(opts.nowMs);
+    else this.online?.refreshWorldBest(opts.nowMs, this.gameIds());
   }
 
   key(k: Key, nowMs: number): 'quit' | void {
@@ -184,7 +184,11 @@ export class App {
     this.results = null;
     this.screen = 'menu';
     this.refreshBest();
-    this.online?.refreshWorldBest(nowMs);
+    this.online?.refreshWorldBest(nowMs, this.gameIds());
+  }
+
+  private gameIds(): string[] {
+    return this.games.map((g) => g.id);
   }
 
   /** Only `account()` says whether we are signed in; `signIn()` may still hold an old phase. */
@@ -192,6 +196,7 @@ export class App {
     const online = this.online!;
     if (online.account()) {
       this.confirmDelete = false;
+      online.clearAccountMessage();
       this.screen = 'account';
     } else {
       online.startSignIn();
@@ -203,8 +208,9 @@ export class App {
     const online = this.online!;
     if (this.confirmDelete) {
       if (k === 'y') {
+        // Stays here: render() goes to the menu once the account is gone; a failure shows its message.
         online.signOut(true);
-        this.toMenu(nowMs);
+        this.confirmDelete = false;
       } else if (k === 'n' || k === 'escape') this.confirmDelete = false;
     } else if (k === 'escape') this.toMenu(nowMs);
     else if (k === 's') {
@@ -290,7 +296,7 @@ export class App {
     } else if (this.screen === 'signin') {
       drawSignIn(area, this.online!.signIn());
     } else if (this.screen === 'account') {
-      drawAccount(area, this.online!.account()?.login ?? '', this.confirmDelete);
+      drawAccount(area, this.online!.account()?.login ?? '', this.confirmDelete, this.online!.accountMessage());
     } else if (this.screen === 'crashed') {
       centre(8, this.crash, 'brightRed');
       centre(18, 'Enter or Esc: menu', 'gray');
