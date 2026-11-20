@@ -147,15 +147,25 @@ length?: { kind: 'timed'; minutes: number }   // ends itself on a clock (Reflex,
   making suggestions run past Claude. The host already knows which path ended the run
   (`finish` from game over vs. Esc/quit/crash).
 - A game's expected length for this player:
-  - fewer than 3 recorded runs: the author's `minutes`;
+  - fewer than 3 recorded runs ("new to you"): the author's `minutes` × 1.5, a safety
+    margin because the author's figure is a guess and a new player is usually slower;
   - otherwise the 75th percentile of recent run times (3 out of 4 runs are shorter),
     biased long on purpose so the suggestion ends before Claude does.
+- The author's `minutes` comes from their own playtests, not a hunch: for `open` and
+  `rounds` games, `docs/adding-a-game.md` gets the rule "play at least 5 complete runs in
+  the dev build and use your typical run time". Dev builds record runs like normal ones,
+  so the author can read their own times.
 
 ### 6. The suggestion
 
 - Candidates: games whose expected length ≤ time left.
-- Pick the longest candidate (fills the time best). Ties: the one played least recently,
-  so suggestions rotate.
+- **New games first.** If any candidate is new to you (`rounds`/`open` game with fewer
+  than 3 recorded runs, or a `timed` game you never finished), suggest it, marked
+  `NEW`. This is how a new game gets launched to everyone: the arcade puts it in front
+  of players until it has a first real estimate for each of them. Among several new
+  candidates, the longest one.
+- Otherwise pick the longest candidate (fills the time best). Ties: the one played
+  least recently, so suggestions rotate.
 - No candidate (time left under the shortest game) or no active task: no suggestion.
 - Recomputed whenever the menu is shown and when a new estimate arrives while in the menu.
 
@@ -168,13 +178,14 @@ length?: { kind: 'timed'; minutes: number }   // ends itself on a clock (Reflex,
    Commit Rush    ~2 min
    Reflex         ~1 min
    Worm           ~5 min (you)
-   Dodge          ~2 min (you)
+   Dodge          ~3 min (est.)  NEW
    Deep Dive      ~8 min
 ```
 
 - The suggested game is pre-selected (cursor starts on it) and marked; Up/Down picks any
   other game as before.
-- Every game with a length shows it; learned lengths are marked "(you)".
+- Every game with a length shows it; learned lengths are marked "(you)", the author's
+  figure (with margin) "(est.)". Games still new to you are marked `NEW`.
 - While waiting for the estimate: `Claude: estimating…`. No active task: the line is
   empty and the menu behaves as today.
 - Menu sort: today it is by title. Builder's call whether to keep that or sort by length;
