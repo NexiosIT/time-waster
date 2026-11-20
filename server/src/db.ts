@@ -158,21 +158,27 @@ export function deletePlayer(db: Db, playerId: number): void {
   db.raw.prepare('DELETE FROM players WHERE id = ?').run(playerId);
 }
 
+// GitHub logins are case-insensitive, so the admin lookups compare with lower().
+export function playersWithLogin(db: Db, login: string): number {
+  const row = db.raw.prepare('SELECT COUNT(*) AS n FROM players WHERE lower(login) = lower(?)').get(login) as { n: number };
+  return row.n;
+}
+
 export function playerIdByLogin(db: Db, login: string): number | null {
-  const row = db.raw.prepare('SELECT id FROM players WHERE login = ? ORDER BY updated_at DESC LIMIT 1').get(login) as
-    | { id: number }
-    | undefined;
+  const row = db.raw
+    .prepare('SELECT id FROM players WHERE lower(login) = lower(?) ORDER BY updated_at DESC LIMIT 1')
+    .get(login) as { id: number } | undefined;
   return row ? row.id : null;
 }
 
 export function setBlocked(db: Db, login: string, blocked: boolean): boolean {
-  const res = db.raw.prepare('UPDATE players SET blocked = ? WHERE login = ?').run(blocked ? 1 : 0, login);
+  const res = db.raw.prepare('UPDATE players SET blocked = ? WHERE lower(login) = lower(?)').run(blocked ? 1 : 0, login);
   return Number(res.changes) > 0;
 }
 
 export function deleteScore(db: Db, login: string, game: string): boolean {
   const res = db.raw
-    .prepare('DELETE FROM best WHERE game = ? AND player_id IN (SELECT id FROM players WHERE login = ?)')
+    .prepare('DELETE FROM best WHERE game = ? AND player_id IN (SELECT id FROM players WHERE lower(login) = lower(?))')
     .run(game, login);
   return Number(res.changes) > 0;
 }

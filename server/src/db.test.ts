@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import {
   openDb, upsertPlayer, createSession, playerForToken, submitScore, board, worldBests,
-  deletePlayer, setBlocked, deleteScore, playerIdByLogin,
+  deletePlayer, setBlocked, deleteScore, playerIdByLogin, playersWithLogin,
 } from './db';
 
 const t = (n: number) => new Date(Date.UTC(2026, 0, 1, 0, 0, n));
@@ -109,5 +109,15 @@ describe('db', () => {
     submitScore(db, 1, 'g', 5, AT, t(1));
     expect(deleteScore(db, 'p1', 'g')).toBe(true);
     expect(deleteScore(db, 'p1', 'g')).toBe(false);
+  });
+
+  test('admin lookups by login ignore case', () => {
+    const db = openDb(':memory:');
+    player(db, 1, 'Alice');
+    submitScore(db, 1, 'g', 5, AT, t(1));
+    expect(playerIdByLogin(db, 'aLICE')).toBe(1);
+    expect(playersWithLogin(db, 'ALICE')).toBe(1);
+    expect(setBlocked(db, 'alice', true)).toBe(true);
+    expect(deleteScore(db, 'ALICE', 'g')).toBe(true);
   });
 });
