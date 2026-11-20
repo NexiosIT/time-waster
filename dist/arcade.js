@@ -2692,6 +2692,171 @@ var galaxy = {
 };
 var galaxy_default = galaxy;
 
+// src/games/paddle-duel/index.ts
+var TOP = 1;
+var BOTTOM = GAME_HEIGHT - 2;
+var PADDLE_H = 4;
+var PLAYER_X = 2;
+var CPU_X = GAME_WIDTH - 3;
+var PLAYER_FACE = PLAYER_X + 0.5;
+var CPU_FACE = CPU_X - 0.5;
+var MIN_PADDLE = TOP;
+var MAX_PADDLE = BOTTOM - PADDLE_H + 1;
+var WIN = 7;
+var STEP = 2;
+var SERVE_SPEED = 0.55;
+var MAX_SPEED2 = 1.2;
+var SPEEDUP = 0.07;
+var MAX_VY = 0.5;
+var CPU_SPEED = 0.27;
+var CPU_WAKE_X = 26;
+var AIM_ERROR = 4;
+var SERVE_TICKS = 30;
+var mid = (MIN_PADDLE + MAX_PADDLE) / 2;
+var clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+function serveBall(dir, ctx) {
+  return {
+    x: GAME_WIDTH / 2,
+    y: (TOP + BOTTOM) / 2 + (ctx.random() - 0.5) * 6,
+    vx: dir * SERVE_SPEED,
+    vy: (ctx.random() - 0.5) * 0.4
+  };
+}
+function hitOffset(paddleTop, y) {
+  return clamp((y - (paddleTop + (PADDLE_H - 1) / 2)) / (PADDLE_H / 2), -1, 1);
+}
+var covers = (top, y) => y >= top - 0.5 && y <= top + PADDLE_H - 0.5;
+function init3(ctx) {
+  return {
+    paddle: Math.round(mid),
+    cpu: mid,
+    aim: 0,
+    ball: serveBall(-1, ctx),
+    serve: SERVE_TICKS,
+    you: 0,
+    them: 0,
+    rally: 0,
+    tick: 0,
+    over: false
+  };
+}
+function onKey4(state, key) {
+  if (state.over) return state;
+  let d = 0;
+  if (key === "up" || key === "w") d = -STEP;
+  else if (key === "down" || key === "s") d = STEP;
+  else return state;
+  const paddle = clamp(state.paddle + d, MIN_PADDLE, MAX_PADDLE);
+  return paddle === state.paddle ? state : { ...state, paddle };
+}
+function moveCpu(state) {
+  const b = state.ball;
+  const tracking = state.serve === 0 && b.vx > 0 && b.x > CPU_WAKE_X;
+  const target = tracking ? b.y + state.aim - (PADDLE_H - 1) / 2 : mid;
+  const step2 = clamp(target - state.cpu, -CPU_SPEED, CPU_SPEED);
+  return clamp(state.cpu + step2, MIN_PADDLE, MAX_PADDLE);
+}
+function point(state, youScored, ctx) {
+  const you = state.you + (youScored ? 1 : 0);
+  const them = state.them + (youScored ? 0 : 1);
+  return {
+    ...state,
+    you,
+    them,
+    rally: 0,
+    aim: 0,
+    ball: serveBall(youScored ? 1 : -1, ctx),
+    // serve toward whoever just lost the point
+    serve: SERVE_TICKS,
+    over: you >= WIN || them >= WIN
+  };
+}
+function update3(prev2, ctx) {
+  if (prev2.over) return prev2;
+  const state = { ...prev2, tick: prev2.tick + 1, cpu: moveCpu(prev2) };
+  if (state.serve > 0) return { ...state, serve: state.serve - 1 };
+  const b = state.ball;
+  let { vx, vy } = b;
+  let x = b.x + vx;
+  let y = b.y + vy;
+  if (y < TOP) {
+    y = 2 * TOP - y;
+    vy = -vy;
+  }
+  if (y > BOTTOM) {
+    y = 2 * BOTTOM - y;
+    vy = -vy;
+  }
+  let rally = state.rally;
+  let aim = state.aim;
+  const bounce = (face, top, dir) => {
+    const t = (b.x - face) / (b.x - x);
+    const yc = b.y + (y - b.y) * t;
+    if (!covers(top, yc)) return false;
+    const speed = Math.min(MAX_SPEED2, Math.abs(vx) + SPEEDUP);
+    vx = dir * speed;
+    vy = hitOffset(top, yc) * MAX_VY;
+    x = face + (face - x);
+    rally += 1;
+    return true;
+  };
+  if (b.vx < 0 && b.x >= PLAYER_FACE && x < PLAYER_FACE) {
+    if (bounce(PLAYER_FACE, state.paddle, 1)) aim = (ctx.random() - 0.5) * AIM_ERROR;
+  } else if (b.vx > 0 && b.x <= CPU_FACE && x > CPU_FACE) {
+    bounce(CPU_FACE, Math.round(state.cpu), -1);
+  }
+  if (x < 0) return point(state, false, ctx);
+  if (x >= GAME_WIDTH) return point(state, true, ctx);
+  return { ...state, ball: { x, y, vx, vy }, rally, aim };
+}
+function scoreOf(s) {
+  const margin = s.you >= WIN ? s.you - s.them : 0;
+  return s.you * 100 + margin * 100;
+}
+function draw3(state, screen) {
+  for (let x = 0; x < GAME_WIDTH; x++) {
+    screen.put(x, 0, "\u2500", "gray");
+    screen.put(x, GAME_HEIGHT - 1, "\u2500", "gray");
+  }
+  const net = Math.floor(GAME_WIDTH / 2);
+  for (let y = TOP; y <= BOTTOM; y += 2) screen.put(net, y, "\u2506", "gray");
+  const label = ` YOU ${state.you}  :  ${state.them} CPU `;
+  screen.text(Math.floor((GAME_WIDTH - label.length) / 2), 0, label, "brightWhite");
+  for (let i = 0; i < PADDLE_H; i++) {
+    screen.put(PLAYER_X, state.paddle + i, "\u2588", "brightCyan");
+    screen.put(CPU_X, Math.round(state.cpu) + i, "\u2588", "brightMagenta");
+  }
+  if (state.over) {
+    const msg = state.you >= WIN ? "YOU WIN" : "CPU WINS";
+    screen.text(Math.floor((GAME_WIDTH - msg.length) / 2), 9, msg, state.you >= WIN ? "brightGreen" : "brightRed");
+    return;
+  }
+  const bx = Math.round(state.ball.x), by = Math.round(state.ball.y);
+  if (bx >= 0 && bx < GAME_WIDTH) screen.put(bx, clamp(by, TOP, BOTTOM), "\u25CF", "brightYellow");
+  if (state.serve > 0 && state.you + state.them === 0) {
+    const msg = "First to 7. Up/Down moves.";
+    screen.text(Math.floor((GAME_WIDTH - msg.length) / 2), 5, msg, "white");
+  }
+  if (state.rally >= 5) screen.text(net - 4, GAME_HEIGHT - 1, ` RALLY ${state.rally} `, "yellow");
+}
+var paddleDuel = {
+  id: "paddle-duel",
+  title: "Paddle Duel",
+  description: "Bounce the ball past the computer. First to 7 wins.",
+  tickMs: 40,
+  controls: "\u2191\u2193 move",
+  maxScore: WIN * 200,
+  // 7 points x 100, plus a 7-0 margin bonus of 700
+  length: { kind: "rounds", minutes: 4 },
+  init: init3,
+  onKey: onKey4,
+  update: update3,
+  draw: draw3,
+  score: scoreOf,
+  isOver: (s) => s.over
+};
+var paddle_duel_default = paddleDuel;
+
 // src/games/rail-dash/index.ts
 var PLAYER_ROW = 17;
 var ACTION_TICKS = 22;
@@ -2703,12 +2868,12 @@ var SAFE_GAP = 8;
 function stepTicks(distance) {
   return Math.max(2, 5 - Math.floor(distance / 200));
 }
-var covers = (t, row) => row >= t.y && row < t.y + t.len;
-var trainAt = (things, lane, row) => things.some((t) => t.kind === "train" && t.lane === lane && covers(t, row));
-function init3(_ctx) {
+var covers2 = (t, row) => row >= t.y && row < t.y + t.len;
+var trainAt = (things, lane, row) => things.some((t) => t.kind === "train" && t.lane === lane && covers2(t, row));
+function init4(_ctx) {
   return { lane: 1, air: 0, roll: 0, up: false, things: [], distance: 0, coins: 0, tick: 0, nextWave: 8, safeLane: 1, over: false };
 }
-function onKey4(s, key) {
+function onKey5(s, key) {
   if (s.over) return s;
   switch (key) {
     case "left":
@@ -2756,7 +2921,7 @@ function check(s) {
   let coins = s.coins, roll = s.roll;
   const things = [];
   for (const t of s.things) {
-    if (t.lane !== s.lane || !covers(t, PLAYER_ROW) || t.kind === "train") {
+    if (t.lane !== s.lane || !covers2(t, PLAYER_ROW) || t.kind === "train") {
       things.push(t);
       continue;
     }
@@ -2775,7 +2940,7 @@ function check(s) {
   }
   return { ...s, up, roll, coins, things };
 }
-function update3(s, ctx) {
+function update4(s, ctx) {
   if (s.over) return s;
   const timed = { ...s, air: Math.max(0, s.air - 1), roll: Math.max(0, s.roll - 1) };
   const tick = s.tick + 1;
@@ -2795,7 +2960,7 @@ function span(screen, lane, y, ch, color) {
   if (y < 0 || y >= 20) return;
   for (let i = 1; i <= LANE_W - 2; i++) screen.put(laneLeft(lane) + i, y, ch, color);
 }
-function draw3(s, screen) {
+function draw4(s, screen) {
   for (let y = 0; y < 20; y++) {
     for (let l = 0; l <= LANES; l++) {
       const x = ORIGIN_X2 + l * (LANE_W + 1);
@@ -2838,10 +3003,10 @@ var railDash = {
   description: "Switch lanes, jump, roll. Dodge trains, grab coins.",
   tickMs: 40,
   controls: "\u2190\u2192 \u2191jump \u2193roll",
-  init: init3,
-  onKey: onKey4,
-  update: update3,
-  draw: draw3,
+  init: init4,
+  onKey: onKey5,
+  update: update4,
+  draw: draw4,
   score: (s) => s.distance + s.coins * COIN_POINTS,
   isOver: (s) => s.over
 };
@@ -2863,7 +3028,7 @@ var X_MAX = GAME_WIDTH - 1 - BOX;
 var Y_MIN = 2;
 var Y_MAX = 20 - 1 - BOX;
 var multiplier = (streak) => streak >= 25 ? 3 : streak >= 10 ? 2 : 1;
-function init4(_ctx) {
+function init5(_ctx) {
   return {
     target: null,
     x: 0,
@@ -2893,7 +3058,7 @@ function miss(s) {
     lifetime: Math.min(LIFE_START, s.lifetime + LIFE_MISS)
   }, { kind: "miss", x: s.x, y: s.y, n: 0, msLeft: GAP_MS2 });
 }
-function onKey5(s, key) {
+function onKey6(s, key) {
   if (s.over || s.target === null) return s;
   if (!TARGETS.includes(key)) return s;
   if (key !== s.target) return miss(s);
@@ -2919,7 +3084,7 @@ function spawn2(s, ctx) {
   const p = spots[Math.floor(ctx.random() * spots.length)];
   return { ...s, target, x: p.x, y: p.y, gapLeft: 0, timeLeft: s.lifetime };
 }
-function update4(prev2, ctx) {
+function update5(prev2, ctx) {
   let s = { ...prev2, elapsedMs: ctx.elapsedMs };
   if (s.flash) {
     const msLeft = s.flash.msLeft - TICK_MS2;
@@ -2938,7 +3103,7 @@ function fadeColor(s) {
   const f = s.timeLeft / s.lifetime;
   return f > 2 / 3 ? "brightWhite" : f > 1 / 3 ? "white" : "gray";
 }
-function draw4(s, screen) {
+function draw5(s, screen) {
   const left = Math.max(0, RUN_MS - s.elapsedMs);
   const secs = Math.ceil(left / 1e3);
   const clock = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}`;
@@ -2973,14 +3138,150 @@ var reflex = {
   tickMs: TICK_MS2,
   controls: "\u2190\u2191\u2192\u2193 a s d f j k l",
   length: { kind: "timed", minutes: 1 },
-  init: init4,
-  onKey: onKey5,
-  update: update4,
-  draw: draw4,
+  init: init5,
+  onKey: onKey6,
+  update: update5,
+  draw: draw5,
   score: (s) => s.score,
   isOver: (s) => s.over
 };
 var reflex_default = reflex;
+
+// src/games/sky-flap/index.ts
+var PLAYER_X2 = 12;
+var TOP2 = 1;
+var BOTTOM2 = GAME_HEIGHT - 2;
+var COL_W = 3;
+var SPACING = 20;
+var GRAVITY = 0.07;
+var FLAP_VY = -0.55;
+var MAX_FALL = 0.75;
+var BASE_SPEED = 0.5;
+var MAX_SPEED3 = 0.8;
+var START_GAP = 7;
+var MIN_GAP = 5;
+var speedFor = (score) => Math.min(MAX_SPEED3, BASE_SPEED + score * 0.01);
+var gapFor = (score) => Math.max(MIN_GAP, START_GAP - Math.floor(score / 10));
+function makeColumn(x, score, prevGapTop, ctx) {
+  const gap = gapFor(score);
+  let lo = TOP2 + 1, hi = BOTTOM2 - gap;
+  if (prevGapTop !== null) {
+    lo = Math.max(lo, prevGapTop - 6);
+    hi = Math.min(hi, prevGapTop + 6);
+  }
+  const gapTop = lo + Math.floor(ctx.random() * (hi - lo + 1));
+  return { x, gapTop, gap, passed: false };
+}
+function hits(c, row) {
+  if (PLAYER_X2 < c.x || PLAYER_X2 >= c.x + COL_W) return false;
+  return row < c.gapTop || row >= c.gapTop + c.gap;
+}
+var rowOf = (y) => Math.round(y);
+function init6(ctx) {
+  return {
+    y: Math.floor((TOP2 + BOTTOM2) / 2),
+    vy: 0,
+    columns: [makeColumn(GAME_WIDTH + 4, 0, null, ctx)],
+    scroll: 0,
+    started: false,
+    flapTicks: 99,
+    tick: 0,
+    score: 0,
+    over: false
+  };
+}
+function onKey7(state, key) {
+  if (state.over) return state;
+  if (key !== "space" && key !== "up" && key !== "w") return state;
+  return { ...state, started: true, vy: FLAP_VY, flapTicks: 0 };
+}
+function update6(prev2, ctx) {
+  if (prev2.over) return prev2;
+  const tick = prev2.tick + 1;
+  if (!prev2.started) return { ...prev2, tick };
+  const vy = Math.min(MAX_FALL, prev2.vy + GRAVITY);
+  let y = prev2.y + vy;
+  let nextVy = vy;
+  if (y < TOP2) {
+    y = TOP2;
+    nextVy = 0;
+  }
+  const flapTicks = prev2.flapTicks + 1;
+  if (rowOf(y) > BOTTOM2) {
+    return { ...prev2, tick, flapTicks, y: BOTTOM2, vy: 0, over: true };
+  }
+  let scroll = prev2.scroll + speedFor(prev2.score);
+  let columns = prev2.columns;
+  let score = prev2.score;
+  const row = rowOf(y);
+  if (columns.some((c) => hits(c, row))) {
+    return { ...prev2, tick, flapTicks, y, vy: nextVy, over: true };
+  }
+  while (scroll >= 1) {
+    scroll -= 1;
+    columns = columns.map((c) => ({ ...c, x: c.x - 1 }));
+    if (columns.some((c) => hits(c, row))) {
+      return { ...prev2, tick, flapTicks, y, vy: nextVy, columns, scroll, score, over: true };
+    }
+    columns = columns.map((c) => {
+      if (c.passed || c.x + COL_W > PLAYER_X2) return c;
+      score += 1;
+      return { ...c, passed: true };
+    });
+  }
+  columns = columns.filter((c) => c.x + COL_W > 0);
+  const last = columns[columns.length - 1];
+  if (!last || last.x <= GAME_WIDTH - SPACING) {
+    const x = last ? last.x + SPACING : GAME_WIDTH;
+    columns = [...columns, makeColumn(x, score, last ? last.gapTop : null, ctx)];
+  }
+  return { ...prev2, tick, flapTicks, y, vy: nextVy, columns, scroll, score };
+}
+function draw6(state, screen) {
+  for (let x = 0; x < GAME_WIDTH; x++) {
+    screen.put(x, 0, "\u2594", "gray");
+    screen.put(x, GAME_HEIGHT - 1, (x + Math.floor(state.tick / 2)) % 4 === 0 ? "\u2593" : "\u2592", "yellow");
+  }
+  for (const c of state.columns) {
+    for (let dx = 0; dx < COL_W; dx++) {
+      const x = c.x + dx;
+      if (x < 0 || x >= GAME_WIDTH) continue;
+      for (let y = TOP2; y <= BOTTOM2; y++) {
+        if (y >= c.gapTop && y < c.gapTop + c.gap) continue;
+        const edge = y === c.gapTop - 1 || y === c.gapTop + c.gap;
+        screen.put(x, y, edge ? "\u2588" : "\u2593", edge ? "brightCyan" : "cyan");
+      }
+    }
+  }
+  const row = rowOf(state.y);
+  const color = state.over ? "brightRed" : "brightYellow";
+  const wing = state.flapTicks < 3 ? "^" : state.vy > 0.3 ? "v" : "-";
+  screen.put(PLAYER_X2 - 1, row, wing, color);
+  screen.put(PLAYER_X2, row, ">", color);
+  if (state.started && !state.over && state.flapTicks < 4) {
+    screen.put(PLAYER_X2 - 2, Math.min(BOTTOM2, row + 1), ".", "gray");
+  }
+  screen.text(GAME_WIDTH - 12, 0, ` SCORE ${String(state.score).padStart(3)} `, "brightWhite");
+  if (!state.started) {
+    const msg = "Press Space to take off";
+    screen.text(Math.floor((GAME_WIDTH - msg.length) / 2), 6, msg, "brightWhite");
+  }
+}
+var skyFlap = {
+  id: "sky-flap",
+  title: "Sky Flap",
+  description: "Tap to flap through the gaps. One touch and you drop.",
+  tickMs: 50,
+  controls: "Spc/\u2191 flap",
+  length: { kind: "open", minutes: 1 },
+  init: init6,
+  onKey: onKey7,
+  update: update6,
+  draw: draw6,
+  score: (s) => s.score,
+  isOver: (s) => s.over
+};
+var sky_flap_default = skyFlap;
 
 // src/games/tank-duel/index.ts
 var W = GAME_WIDTH;
@@ -2989,7 +3290,7 @@ var MAX_HP = 100;
 var BLAST = 3;
 var MAX_DAMAGE = 50;
 var VMAX = 2.2;
-var GRAVITY = 0.035;
+var GRAVITY2 = 0.035;
 var ASPECT = 0.5;
 var SUBSTEPS = 4;
 var MAX_WIND = 6e-3;
@@ -2998,7 +3299,7 @@ var CPU_WAIT_TICKS = 15;
 var WIN_BONUS = 100;
 var TRAIL = 10;
 var PREVIEW_TICKS = 16;
-var clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+var clamp2 = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 var rad = (deg) => deg * Math.PI / 180;
 function makeGround(rnd) {
   const p1 = rnd() * Math.PI * 2, p2 = rnd() * Math.PI * 2;
@@ -3008,7 +3309,7 @@ function makeGround(rnd) {
   return Array.from({ length: W }, (_, x) => {
     const u = x / W;
     const h = 15 - hill * Math.sin(Math.PI * u) + a1 * Math.sin(Math.PI * f1 * u + p1) + a2 * Math.sin(Math.PI * f2 * u + p2);
-    return clamp(Math.round(h), 6, H - 2);
+    return clamp2(Math.round(h), 6, H - 2);
   });
 }
 function flattenUnder(ground, x) {
@@ -3066,7 +3367,7 @@ function collide(s, sh) {
 function advance(s, shell) {
   let sh = shell;
   for (let i = 0; i < SUBSTEPS; i++) {
-    const vx = sh.vx + s.wind / SUBSTEPS, vy = sh.vy + GRAVITY / SUBSTEPS;
+    const vx = sh.vx + s.wind / SUBSTEPS, vy = sh.vy + GRAVITY2 / SUBSTEPS;
     sh = { ...sh, vx, vy, x: sh.x + vx / SUBSTEPS, y: sh.y + vy / SUBSTEPS, age: sh.age + 1 };
     const hit = collide(s, sh);
     if (hit) return { shell: sh, hit };
@@ -3132,12 +3433,12 @@ function aiShot(s, rnd) {
     }
   }
   const err = Math.max(1, 14 - 4 * s.cpuShots - 2 * (s.round - 1));
-  return { angle: best.angle, power: clamp(Math.round(best.power + (rnd() * 2 - 1) * err), 5, 100) };
+  return { angle: best.angle, power: clamp2(Math.round(best.power + (rnd() * 2 - 1) * err), 5, 100) };
 }
-function init5(ctx) {
+function init7(ctx) {
   return newRound(1, 0, ctx.random, "Aim with the arrows, Space to fire.");
 }
-function onKey6(s, key) {
+function onKey8(s, key) {
   if (s.phase.kind !== "aim") return s;
   const p = s.player;
   switch (key) {
@@ -3167,7 +3468,7 @@ function resolve(s, owner, ctx) {
   }
   return { ...s, phase: { kind: "aim" }, wind: newWind(ctx.random) };
 }
-function update5(s, ctx) {
+function update7(s, ctx) {
   const ph = s.phase;
   switch (ph.kind) {
     case "aim":
@@ -3210,7 +3511,7 @@ function windText(wind) {
   if (n === 0) return "Wind -";
   return "Wind " + (wind < 0 ? "<".repeat(n) : ">".repeat(n));
 }
-function draw5(s, screen) {
+function draw7(s, screen) {
   for (let x = 0; x < W; x++) {
     for (let y = Math.max(1, s.ground[x]); y < H; y++) screen.put(x, y, "\u2588", y === s.ground[x] ? "brightGreen" : "green");
   }
@@ -3249,10 +3550,10 @@ var tankDuel = {
   description: "Aim, set power, fire. The computer shoots back.",
   tickMs: 40,
   controls: "\u2190\u2192\u2191\u2193 Spc fire",
-  init: init5,
-  onKey: onKey6,
-  update: update5,
-  draw: draw5,
+  init: init7,
+  onKey: onKey8,
+  update: update7,
+  draw: draw7,
   score: (s) => s.score,
   isOver: (s) => s.over
 };
@@ -3261,7 +3562,7 @@ var tank_duel_default = tankDuel;
 // src/games/worm/index.ts
 var BOARD_W2 = Math.floor((GAME_WIDTH - 2) / 2);
 var BOARD_H2 = GAME_HEIGHT - 2;
-var STEP = {
+var STEP2 = {
   up: { x: 0, y: -1 },
   down: { x: 0, y: 1 },
   left: { x: -1, y: 0 },
@@ -3279,7 +3580,7 @@ function spawnDot(body, ctx) {
   if (free.length === 0) return null;
   return free[Math.floor(ctx.random() * free.length)];
 }
-function init6(ctx) {
+function init8(ctx) {
   const cx = Math.floor(BOARD_W2 / 2), cy = Math.floor(BOARD_H2 / 2);
   const body = [{ x: cx, y: cy }, { x: cx - 1, y: cy }, { x: cx - 2, y: cy }];
   return {
@@ -3293,17 +3594,17 @@ function init6(ctx) {
     tick: 0
   };
 }
-function onKey7(state, key) {
+function onKey9(state, key) {
   if (key === "space") return { ...state, turbo: !state.turbo };
   if (key !== "up" && key !== "down" && key !== "left" && key !== "right") return state;
   if (key === OPPOSITE[state.moved]) return state;
   return { ...state, pending: key };
 }
-function update6(prev2, ctx) {
+function update8(prev2, ctx) {
   const state = { ...prev2, tick: prev2.tick + 1 };
   if (!state.turbo && state.tick % 2 === 1) return state;
   const head = state.body[0];
-  const step2 = STEP[state.pending];
+  const step2 = STEP2[state.pending];
   const next = { x: head.x + step2.x, y: head.y + step2.y };
   if (next.x < 0 || next.x >= BOARD_W2 || next.y < 0 || next.y >= BOARD_H2) {
     return { ...state, over: true };
@@ -3337,7 +3638,7 @@ function cell(screen, p, chars, color) {
   screen.put(1 + p.x * 2, 1 + p.y, chars[0], color);
   screen.put(2 + p.x * 2, 1 + p.y, chars[1], color);
 }
-function draw6(state, screen) {
+function draw8(state, screen) {
   drawBorder2(state, screen);
   if (state.dot) cell(screen, state.dot, "\u25CF ", "yellow");
   state.body.forEach((p, i) => {
@@ -3355,17 +3656,17 @@ var worm = {
   maxScore: 5220,
   // 29 x 18 cells x 10 points per dot (an upper bound; the worm starts on some cells)
   length: { kind: "open", minutes: 3 },
-  init: init6,
-  onKey: onKey7,
-  update: update6,
-  draw: draw6,
+  init: init8,
+  onKey: onKey9,
+  update: update8,
+  draw: draw8,
   score: (s) => s.score,
   isOver: (s) => s.over
 };
 var worm_default = worm;
 
 // src/games/registry.generated.ts
-var games = [block_drop_default, drift_default, galaxy_default, rail_dash_default, reflex_default, tank_duel_default, worm_default];
+var games = [block_drop_default, drift_default, galaxy_default, paddle_duel_default, rail_dash_default, reflex_default, sky_flap_default, tank_duel_default, worm_default];
 
 // src/arcade.ts
 if (!process.stdout.isTTY || !process.stdin.isTTY) {
