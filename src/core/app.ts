@@ -5,7 +5,7 @@ import { addScore, loadScores } from './scores';
 import type { ScoreEntry } from './scores';
 import type { ClaudeEvent } from './events';
 import { GAME_HEIGHT, GAME_WIDTH, MIN_COLS, MIN_ROWS } from './types';
-import type { Color, Game, Key } from './types';
+import type { Color, Game, GameLength, Key } from './types';
 
 export interface AppOptions {
   games: Game<any>[];
@@ -233,7 +233,17 @@ function wellFormed(g: Game<any>): boolean {
     typeof g.description === 'string' &&
     typeof g.controls === 'string' &&
     typeof g.tickMs === 'number' && Number.isFinite(g.tickMs) && g.tickMs > 0 &&
-    [g.init, g.onKey, g.update, g.draw, g.score, g.isOver].every((f) => typeof f === 'function')
+    [g.init, g.onKey, g.update, g.draw, g.score, g.isOver].every((f) => typeof f === 'function') &&
+    (g.length === undefined || wellFormedLength(g.length))
+  );
+}
+
+function wellFormedLength(l: unknown): boolean {
+  const x = l as GameLength;
+  return (
+    typeof x === 'object' && x !== null &&
+    ['timed', 'rounds', 'open'].includes(x.kind) &&
+    Number.isFinite(x.minutes) && x.minutes > 0
   );
 }
 

@@ -251,6 +251,20 @@ describe('App', () => {
     expect(rows(app).filter((l) => l.includes('Best ')).length).toBe(1);
   });
 
+  it('skips a game whose length is malformed, keeps one without length', () => {
+    const app = mk([
+      fake('a', 'Alpha', { length: { kind: 'timed', minutes: 1 } }),
+      fake('b', 'Bravo', { length: { kind: 'sometimes', minutes: 1 } as any }),
+      fake('c', 'Charlie', { length: { kind: 'open', minutes: 0 } }),
+      fake('d', 'Delta'),
+    ]);
+    const r = rows(app);
+    expect(has(r, 'Alpha')).toBe(true);
+    expect(has(r, 'Bravo')).toBe(false);
+    expect(has(r, 'Charlie')).toBe(false);
+    expect(has(r, 'Delta')).toBe(true);
+  });
+
   it('Esc on the crash screen returns to the menu', () => {
     const app = mk([fake('a', 'Alpha', { update: () => { throw new Error('boom'); } })]);
     app.key('enter', 0);
