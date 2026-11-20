@@ -29,6 +29,10 @@ export class Banner {
     return { mode: 'marker', text: ev.type === 'done' ? '● Claude done' : '● Claude needs you' };
   }
 
+  color(): 'brightGreen' | 'brightYellow' {
+    return this.ev?.type === 'attention' ? 'brightYellow' : 'brightGreen';
+  }
+
   clearMarker(): void {
     this.marker = false;
   }
