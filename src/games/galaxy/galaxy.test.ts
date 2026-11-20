@@ -116,6 +116,26 @@ describe('galaxy drawing', () => {
     expect(b.rowText(5)).not.toContain('/V\\');
   });
 
+  it('draws each enemy kind with its sprite and colour', () => {
+    const b = render(initState());
+    // fy 2: drone row 2, brutes rows 3-4, stinger row 5; fx 14.
+    expect(b.rowText(2).slice(14, 17)).toBe('<o>');
+    expect(b.get(14, 2).color).toBe('brightCyan');
+    for (const y of [3, 4]) {
+      expect(b.rowText(y).slice(14, 17)).toBe('{#}');
+      expect(b.get(15, y).color).toBe('brightMagenta');
+    }
+    expect(b.rowText(5).slice(14, 17)).toBe('/V\\');
+    expect(b.get(14, 5).color).toBe('brightYellow');
+  });
+
+  it('keeps row 0 HUD-only at the lowest and rightmost formation', () => {
+    for (const fx of [0, 29, -20]) {
+      const b = render({ ...initState(), fx, fy: 16, shot: { x: 59, y: 1 } });
+      expect(b.rowText(0)).toMatch(/^Wave 1\/5   Lives ♥♥♥\s+Score 0$/);
+    }
+  });
+
   it('shows GALAXY CLEARED during the banner', () => {
     expect(render(initState()).rowText(9)).not.toContain('GALAXY CLEARED');
     const b = render({ ...initState(), banner: 10 });

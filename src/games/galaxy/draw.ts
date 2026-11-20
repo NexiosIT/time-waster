@@ -5,8 +5,8 @@ import {
 import type { GalaxyState, Kind } from './state';
 import { WAVES } from './waves';
 
-const SPRITE: Record<Kind, string> = { drone: '<o>', brute: '/O\\', stinger: '/V\\' };
-const COLOR: Record<Kind, Color> = { drone: 'brightCyan', brute: 'brightMagenta', stinger: 'yellow' };
+const SPRITE: Record<Kind, string> = { drone: '<o>', brute: '{#}', stinger: '/V\\' };
+const COLOR: Record<Kind, Color> = { drone: 'brightCyan', brute: 'brightMagenta', stinger: 'brightYellow' };
 const BANNER = 'GALAXY CLEARED';
 
 /** Pure draw: reads state, writes screen. Every write is clipped to the area. */
