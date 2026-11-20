@@ -6,6 +6,7 @@ import { MAX_OIL, MAX_PILLARS, SHUFFLE_TICKS, WARN_TICKS } from './obstacles';
 import { angleDiff, COINS_TO_MAX, GRIP_SLOW, headingAngle, speedForCoins, START_SPEED, TICK_MS } from './physics';
 import { hasEffect } from './effects';
 import { POWER_LIFE, resolveMystery } from './powerups';
+import { FIRST_POWER_AT } from './powerups';
 import drift, { applyPower, cellOf, RAIN_COUNT, spawnAvoid, TRAIL_LEN, type DriftState } from './index';
 
 const ctx = (seed = 1): GameContext => ({ random: createRandom(seed), elapsedMs: 0 });
@@ -33,6 +34,11 @@ describe('drift', () => {
     expect(drift.score(s)).toBe(0);
     expect(drift.isOver(s)).toBe(false);
     expect(isBlocked(s.coin, s.pillars)).toBe(false);
+  });
+
+  it('the first power-up is due after the 2nd coin, for every seed', () => {
+    for (let seed = 1; seed <= 20; seed++) expect(drift.init(ctx(seed)).nextPowerAt).toBe(FIRST_POWER_AT);
+    expect(FIRST_POWER_AT).toBe(2);
   });
 
   it('onKey rotates heading, sets lastTurn, ignores other keys, does not mutate', () => {

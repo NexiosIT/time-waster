@@ -39,6 +39,9 @@ export function resolveMystery(ctx: GameContext): Exclude<PowerKind, 'mystery'> 
   return MYSTERY_OUTCOMES[Math.floor(ctx.random() * MYSTERY_OUTCOMES.length)];
 }
 
+/** Coins to collect before the first power-up of a run spawns. */
+export const FIRST_POWER_AT = 2;
+
 /** Coins to collect before the next power-up spawns: 3 or 4. */
 export function nextPowerGap(ctx: GameContext): number {
   return 3 + Math.floor(ctx.random() * 2);

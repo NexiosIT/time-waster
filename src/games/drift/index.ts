@@ -8,7 +8,7 @@ import {
   headingAngle, isDrifting, rotateHeading, speedForCoins, TICK_MS, turnToward,
 } from './physics';
 import {
-  nextPowerGap, pickPower, POWER_BLINK, POWER_LIFE, POWER_LOOK, resolveMystery, type PowerKind, type PowerUp,
+  FIRST_POWER_AT, nextPowerGap, pickPower, POWER_BLINK, POWER_LIFE, POWER_LOOK, resolveMystery, type PowerKind, type PowerUp,
 } from './powerups';
 
 export const TRAIL_LEN = 6;
@@ -50,7 +50,7 @@ function init(ctx: GameContext): DriftState {
   return {
     x: START.x, y: START.y, heading: 0, travel: 0, lastTurn: 1, coins: 0,
     coin: spawnCoin(START, pillars, ctx), extraCoins: [], pillars, oil: [], shuffle: null, pending: [], trail: [], crashed: false,
-    points: 0, scheduleCoins: 0, nextPowerAt: nextPowerGap(ctx), powerUp: null, effects: [], tick: 0,
+    points: 0, scheduleCoins: 0, nextPowerAt: FIRST_POWER_AT, powerUp: null, effects: [], tick: 0,
   };
 }
 
